@@ -1,0 +1,79 @@
+- based on default COM windows window, 120 (width) x 30 (height)
+Required pieces
+- current market prices
+- current holdings and cash
+- current net worth
+- other players and their info
+	> which info?
+- chat window
+- Die roll / results
+√
+2713 is check
+ctrl-v u
+
+- You can click the +/- (buy/sell) but the purchases won't go through until just before
+	the next roll, at that point, the totals will be reported
+- For borders, each char space can have vt, vb, hl, hr.  Each window will control its inner lines itself
+	but the outer border, it will add only the parts that "face" itself.  The outer border of the whole window
+	is another thing
+
+IDEA: Other players can be viewed as a separate window??  window right edge can be RE of market activity
++----------------------------------------------------------------------------------------------------------------------+
+|                                          -= S T O C K   T I C K E R =-
+| Status: not connected
++----------------------------------------------------------------------------------------------------------------------+
+|   MARKET VAL/DIV   | OWNED  | PENDING |   $/BLOCK   |     MARKET ACTIVITY  |       PLAYERS
+|--------------------+--------+---------+-------------+----------------------+-----------------------------------------
+| GOLD       XXX  ✓  | XXXXXX |  -----0 | -       0 + |  INDUSTRIAL DOWN 20  | Fred    $                                                        |
+| SILVER     XXX  ✓  | XXXXXX |  -----0 | -       0 + |  GOLD         UP  5  |                                                            |
+| INDUSTRIAL XXX  ✓  | XXXXXX |  -----0 | -       0 + |  OIL         DIV 10  |                                                            |
+| BONDS      XXX     | XXXXXX |  -----0 | -       0 + |  ....                |                                                            |
+| OIL        XXX  ✓  | XXXXXX |  -----0 | -       0 + |  GRAIN      DOWN  5  |                                                            |
+| GRAIN      XXX     | XXXXXX |  -----0 | -       0 + |  GRAIN      DOWN  5  |                                                            |
+|-----------------------------+---------+-------------+----------------------|                                         |
+| Cash:      $12000           | $     0 |  BLOCK SZ   |  NEXT ACTION IN:     |                                     |
+| Net Worth: $50000           |         | -     500 + |       0:30           |                                       |
+|-----------------------------+---------+------------------------------------+
+| GAME MESSAGES
++---------------------------------------------------------------------------
+| Player 3 shat bricks                                                                                                                                           |
+| Player1 bought GOLD                                                                                                                                            |
+| Player2 sold INDUSTRIAL                                                                                                                                           |
+| BONDS has split!                                                                                                                           |
+|                                                                                                                                            |
+|------------------------------                                                                                                              |
+|                                                                                                                                            |
+| +---------------------------------------                                                                                                   |
+| | Player1: I'm gonna kick you're ass!                                                                                |
+| | Player2: Your a little bitch!                                                                                      |
+| |                                                                                                                    |
+| |                                                                                                                    |
+| |                                                                                                                    |
+| |                                                                                                                    |
+| +-------------------------------------------                                                                         |
+|                                                                                                                      |
+|                                                                                                                      |
+|          REQUEST PAUSE            QUIT/FORFEIT                                                                       |
+|                                                                                                                      |
++----------------------------------------------------------------------------------------------------------------------+
+
+approx amounts (shown to hide secrets)
+<1k
+1-2k
+2-5k
+5-10k
+10-20k
+20-50k
+50k+
+
+BUYING/SELLING
+Players can put in orders to buy/sell anytime but the actual purchase will not be completed on the
+server until just *before* the next die roll.  Players can input as many buy/sell orders as they want
+between die-rolls but these won't even go to the server until the server makes a call requesting the
+info.  Once this call has been recieved by a client, buy/sell operations should be disabled and the
+full request sent to the server. Server then processes all the operations from all players and sends
+confirmations to all cients.  Once all clients have confirmations sent, the die roll is executed
+and reported to the clients, at which point buy/sell operations can be enabled again.
+Each time a transaction (tx) is requested by the client,
+a message wil
+

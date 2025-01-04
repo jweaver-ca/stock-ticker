@@ -1,0 +1,23 @@
+Basic chat program. Consist of client and server
+
+Server can have many rooms. 
+	- 
+
+Client 
+	- connects to server
+	- login with name. unique to server
+	- ability to create room, join room (error if not there)
+	- receives messages from joined room, prints to screen with username
+
+HURDLES:
+- when client is running, logged in, joined in room, how do you allow input but also
+	allow incoming messages to print in terminal?
+	> guess i'll have to make a loop and read char by char.  Would prefer no non-standard
+		libraries for this...
+	> FIX: pip install windows-curses  <-- use curses library
+- curses: nodelay() makes getch() non-blocking but this goes full-boar on the processor.
+	> HOW-TO: use threading to start using events.
+
+MISC NOTES:
+- There is no cross-platform built-in-library-only python solution to reading keyboard input
+	directly. curses is probably the easiest option (requiring pip install on windows)

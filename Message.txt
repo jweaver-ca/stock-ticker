@@ -1,0 +1,36 @@
+Stock Ticker Message protocol
+messages are sent between client and server as json representations of python
+dictionaries with two keys:  TYPE, DATA
+  TYPE is a string to identify the type of message
+  DATA is optional data to go along with the message
+
+TODO: Decide if Messages have 2 distinct types or not:
+		1. In-game messages relating specifically to game play/game state
+		2. Out-of-game/connection messages
+	- And should these programmed in a fundamentally different way?
+
+SENT
+BY      TYPE        MEANING                         DATA
+-----   ----------  -------------------             ----------------------------------------
+C       initconn    Clients first message to srv    Client name
+C       reconn      Reconnect request               {name: XX, id: XX}
+C       msg         Cli chat message                string with chat message contents
+C       exit        Alert client exit               n/a
+ S      conn-accept Server accepted                 {id: XX}
+ S      chatmsg     Chat Message                    string with chat message contents (incl. cli info)
+ S      error       Server couldnt process msg      error details
+ S      disconnect  A client has disc.              Client name
+ S      server-exit Server exiting
+ S      joined      A client has joined             Client name
+--- GAME RELATED ---
+CS      start       Start game/alert game started   n/a
+C       buysell     Buy/Sell stock                  {reqid: ???, stock: #, price: #, shares: #} 
+C       pause       Pause market briefly            n/a
+ S      initmkt     Markets initial status          (all stock prices)
+ S      approve     Approval of buy/sell            {reqid: ???, approved: bln}
+ S      trades      Summary of trades               (not sure data yet)
+ S      market      Market price change             {stock: #, amount: #, newprice: #, div: bln}
+ S      div         Dividend                        {stock: #, amount: #, earnings: #}
+ S      offmarket   Stock went off market           {stock: #, newprice: #, div: bln}
+ S      split       Stock split                     {stock: #, newprice: #, shares: #, div: bln}
+ S      gameover    Game has ended                  {(market summary, holdings for all players, cash for all players, net worth for all, winner)}
