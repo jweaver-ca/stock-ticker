@@ -76,26 +76,37 @@ class GameBoard(object):
         (scry, scrx) = stdscr.getmaxyx()
         self.win_main = Window(1, 1, scry-2, scrx-2)
 
-        self.win_top = Window(self.win_main.TY(), self.win_main.LX(), 2, self.win_main.width)
+        # Top section
+        self.win_top = Window(self.win_main.TY(), self.win_main.LX(), 3, self.win_main.width)
         str_title = '-=  S T O C K   T I C K E R  =-'
         self.add_text_field(self.win_top, 0, 0, self.win_top.width, str_title, justify='^')
-        self.add_text(self.win_top, 1, 1, "Status: ")
         str_status = 'Status: '
-        self._add_field(str_status, self.win_top, 1, len(str_status) + 1, self.win_top.width - len(str_status) -1, initval='< disconnected >', justify='<')
-        #self.add_text(self.win_top, -1, 0, "Bro!")
+        str_players = 'Players: '
+        self.add_text(self.win_top, 1, 1, str_status)
+        self._add_field("status", self.win_top, 1, len(str_status) + 1, self.win_top.width - len(str_status) -1, initval='< disconnected >', justify='<')
+        self.add_text(self.win_top, 2, 1, str_players)
+        self._add_field("players", self.win_top, 2, len(str_players) + 1, self.win_top.width - len(str_status) -1, initval='???', justify='<')
+
+        # Market section
         self.win_market = Window(self.win_top.BY()+2, self.win_main.LX(), 11, 34) # uly, ulx, h, w
-        self.win_mkt_act = Window(self.win_top.BY()+2, self.win_market.RX()+2, 11, 22)
+
+        # buysell
+        self.win_buysell = Window(self.win_top.BY()+2, self.win_market.RX()+2, self.win_market.height, 32) # uly, ulx, h, w 
+
+        # mkt_act (market activity)
+        self.win_mkt_act = Window(self.win_top.BY()+2, self.win_buysell.RX()+2, self.win_market.height, 22)
 
 
         dict_border_cells = dict() # key = tuple (y,x), value = 
-        GameBoard.apply_border(self.win_top, dict_border_cells)
         GameBoard.apply_border(self.win_main, dict_border_cells)
+        GameBoard.apply_border(self.win_top, dict_border_cells)
         GameBoard.apply_border(self.win_market, dict_border_cells)
+        GameBoard.apply_border(self.win_buysell, dict_border_cells)
         GameBoard.apply_border(self.win_mkt_act, dict_border_cells)
 
-        self.sa = ScrollArea(self.scr, self.win_mkt_act)
-
         self._init_draw_market(dict_border_cells)
+        self._init_draw_buysell(dict_border_cells)
+        self._init_draw_mkt_act(dict_border_cells)
 
         # last thing after all windows have drawn their lines, borders, etc
         self.draw_border(dict_border_cells)
@@ -165,6 +176,12 @@ class GameBoard(object):
         self.scr.addstr(win.uly+thisy, win.ulx+thisx, text)
 
     def add_text_field(self, win, y, x, width, text, justify):
+        # TODO: 'field' might be bad choice of words, because 'field' has been referring to an
+        #       updatable area of the gameboard.  This is not updateable. Find another name
+        #       to indicate it requires width and justify...
+        '''
+        Similar to add_text except width is provided and has facilities for justification 
+        '''
         if justify not in ['<', '^', '>']:
             raise ValueError(f"Invalid value for justify [{justify}]")
         str_text = f"{text:{justify}{width}s}"
@@ -177,7 +194,7 @@ class GameBoard(object):
 
     def _init_draw_market(self, dict_border_cells):
         (uly, ulx, h, w) = self.win_market.dimensions()
-        yoff = 3 # y from top of window to start
+        yoff = 2 # y from top of window to start
         xoff = 3
         max_name_len = max([len(x) for x in self.stock_names])
         len_stockprice = 3
@@ -199,8 +216,48 @@ class GameBoard(object):
         #self._draw_hline(dict_border_cells, self.win_market, 1)
         self.win_market.draw_hline(dict_border_cells, 2)
         self.win_market.draw_hline(dict_border_cells, 9)
-        self.add_text(self.win_market, 0, 6, 'MARKET VAL/DIV')
+        str_market1 = 'MARKET VAL/DIV'
+        str_cash = 'Cash:      $'
+        str_net_worth = 'Net Worth: $'
+        self.add_text(self.win_market, 0, 6, str_market1)
+        ycash = yoff+len(self.stock_names)+1
+        self.add_text(self.win_market, ycash, 1, str_cash)
+        self.add_text(self.win_market, ycash+1, 1, str_net_worth)
+        self._add_field('cash', self.win_market, ycash, 1+len(str_cash), 7, initval=0, justify='>')
+        self._add_field('networth', self.win_market, ycash+1, 1+len(str_net_worth), 7, initval=0, justify='>')
 
+    def _init_draw_buysell(self, dict_border_cells):
+        win = self.win_buysell
+        (uly, ulx, h, w) = win.dimensions()
+        win.draw_hline(dict_border_cells, 2)
+        midx = int(win.width/2)
+        win.draw_vline(dict_border_cells, midx)
+        str_pending = 'PENDING'
+        str_block = '$/BLOCK'
+        self.add_text_field(win, 0, 0, midx, str_pending, '^')
+        self.add_text_field(win, 0, midx, midx, str_block, '^')
+        width_pending = midx - 3 # (-1 because a line is there, and -1 for a space on each side)
+        yoff = 2
+        for i, stockname in enumerate(self.stock_names):
+            self._add_field(f'pending-{i}', self.win_buysell, yoff+i, 1, width_pending, '>', initval=0)
+        
+    def _init_draw_mkt_act(self, dict_border_cells):
+        win = self.win_mkt_act
+        (uly, ulx, h, w) = win.dimensions()
+        win.draw_hline(dict_border_cells, 2)
+        str_head = 'MARKET ACTIVITY'
+        str_next_action = 'NEXT ACTION IN:'
+        if len(str_head) > win.width:
+            raise ValueError(f"Title [{str_head}] too long for window")
+        self.add_text_field(win, 0, 0, win.width, str_head, justify='^')
+        xlowline = -3
+        win.draw_hline(dict_border_cells, xlowline)
+        self.add_text_field(win, -2, 0, win.width, str_next_action, justify='^')
+        # TODO: ScrollAreas, like labels maybe should be accessible by a name??
+        self.sa_mkt_act = ScrollArea(self.scr, self.win_mkt_act, offset=(1,2,1,3))
+        self._add_field('next-action', win, win.height-1, 1, win.width-2, justify='^', initval="00:00.0")
+
+        
     def _draw_hline(self, dict_border_cells, win, yfromborder, from_side_borders=None):
         '''
         Draw a horizontal line in the given window (win)
@@ -234,7 +291,38 @@ class GameBoard(object):
                 brdr_val &= ~self.BRDR_RIGHT
             GameBoard._border_cell_val(key, brdr_val, dict_border_cells)
             #print (f"{key} {brdr_val} {dict_border_cells[key]} {self.LKU_BORDER[dict_border_cells[key]]}")
-            print (f"{key} {brdr_val} {dict_border_cells[key]}")
+            #print (f"{key} {brdr_val} {dict_border_cells[key]}")
+
+    def _draw_vline(self, dict_border_cells, win, xfromborder, from_tb_borders=(0,0)):
+        '''
+        Draw a vertical line in the given window (win)
+        Must be called during init phase before GameBoard calls draw_border
+        NOTE: Lines drawn in windows can connect to the outer border which is conceptually
+            outside the window's area
+        xfromborder: (1+) lines from left of window. 1 is directly to right of the left border
+            negative means left from right border of window
+        from_tp_borders: optional 2-tuple (top,bottom) for spaces from the top/bottom edge
+            (default (0,0))
+        '''
+        (uly, ulx, h, w) = win.dimensions()
+        # ensure line is within window
+        if xfromborder == 0 or xfromborder > w or xfromborder < -w:
+            raise ValueError(f"xfromborder [{xfromborder}] outside the window boundary")
+        if any([x<0 for x in from_tb_borders]):
+            raise ValueError(f"from_tb_borders [{from_tb_borders}] can't have values less than zero")
+        if xfromborder >= 1:
+            x = ulx-1 + xfromborder
+        else:
+            x = ulx+w + xfromborder
+        base_brdr_val = self.BRDR_UP | self.BRDR_DOWN
+        for y in range(uly-1+from_tb_borders[0], uly+h+1-from_tb_borders[1]):
+            key = (y, x)
+            brdr_val = base_brdr_val
+            if y == uly-1:
+                brdr_val &= ~self.BRDR_UP  # remove the top part
+            elif y == uly+h:
+                brdr_val &= ~self.BRDR_DOWN
+            GameBoard._border_cell_val(key, brdr_val, dict_border_cells)
 
     def _add_field(self, name, win, offsety, offsetx, length, justify='<', initval=None):
         if name in self.fields:
@@ -403,7 +491,38 @@ class Window(object):
                 brdr_val &= ~GameBoard.BRDR_RIGHT
             GameBoard._border_cell_val(key, brdr_val, dict_border_cells)
             #print (f"{key} {brdr_val} {dict_border_cells[key]} {self.LKU_BORDER[dict_border_cells[key]]}")
-            print (f"{key} {brdr_val} {dict_border_cells[key]}")
+            #print (f"{key} {brdr_val} {dict_border_cells[key]}")
+
+    def draw_vline(self, dict_border_cells, xfromborder, from_tb_borders=(0,0)):
+        '''
+        Draw a vertical line in the given window (win)
+        Must be called during init phase before GameBoard calls draw_border
+        NOTE: Lines drawn in windows can connect to the outer border which is conceptually
+            outside the window's area
+        xfromborder: (1+) lines from left of window. 1 is directly to right of the left border
+            negative means left from right border of window
+        from_tp_borders: optional 2-tuple (top,bottom) for spaces from the top/bottom edge
+            (default (0,0))
+        '''
+        (uly, ulx, h, w) = self.dimensions()
+        # ensure line is within window
+        if xfromborder == 0 or xfromborder > w or xfromborder < -w:
+            raise ValueError(f"xfromborder [{xfromborder}] outside the window boundary")
+        if any([x<0 for x in from_tb_borders]):
+            raise ValueError(f"from_tb_borders [{from_tb_borders}] can't have values less than zero")
+        if xfromborder >= 1:
+            x = ulx-1 + xfromborder
+        else:
+            x = ulx+w + xfromborder
+        base_brdr_val = GameBoard.BRDR_UP | GameBoard.BRDR_DOWN
+        for y in range(uly-1+from_tb_borders[0], uly+h+1-from_tb_borders[1]):
+            key = (y, x)
+            brdr_val = base_brdr_val
+            if y == uly-1:
+                brdr_val &= ~GameBoard.BRDR_UP  # remove the top part
+            elif y == uly+h:
+                brdr_val &= ~GameBoard.BRDR_DOWN
+            GameBoard._border_cell_val(key, brdr_val, dict_border_cells)
 
     def dimensions(self):
         '''
@@ -419,6 +538,9 @@ class Field(object):
     - length: number of chars
     - justify: '<', '>', '^' (left, right, center as in f-strings)
     '''
+    #TODO: offset here should be changed to 1-based so that we can also have
+    #      negative to indicate left/bottom relativity. Also it's consistent
+    #      with other offset type arguments in other places
     def __init__(self, win, offsety, offsetx, length, justify='<'):
         self.win = win
         self.y = win.uly+offsety
@@ -448,24 +570,31 @@ class ScrollArea(object):
         window: tuple (uly, ulx, h, w) where this will go
         offset: tuple (left,up,right,down), if not given, all zeros (whole window)
         '''
-        if offset is not None:
-            # this will be 4-tuple of padding from the window's edge
-            # default is (0,0,0,0) i.e. whole window
-            raise ValueError("offset not implemented yet!!")
+        if offset is None:
+            offset = (0, 0, 0, 0)
+        # make sure offset is legal for window size
+        if any([x<0 for x in offset]):
+            raise ValueError(f"bad offset [{offset}]")
+        thiswidth = window.width - (offset[0]+offset[2])
+        thisheight = window.height - (offset[1]+offset[3])
+        if (thiswidth < 0) or (thisheight < 0):
+            raise ValueError(f"offset is too large for window [{offset}]")
         self.messages = []
         self.scr = scr
-        self.window = window
-        self.height = window.height
-        self.width = window.width
-        self.firsty = self.window.uly + self.height # bottom line (first)
+        #self.window = window
+        self.window = Window(window.uly+offset[1], window.ulx+offset[0], thisheight, thiswidth)
+        #self.height = self.window.height
+        #self.width = self.window.width
+        self.firsty = self.window.uly + self.window.height # bottom line (first)
+        print (self.window.dimensions())
 
     def add_message(self, str_message):
-        lst_msg = [ f"{x:<{self.width}}" for x in textwrap.wrap(str_message,width=self.width)][::-1]
-        self.messages = lst_msg + self.messages[:self.height-len(lst_msg)]
+        lst_msg = [ f"{x:<{self.window.width}}" for x in textwrap.wrap(str_message,width=self.window.width)][::-1]
+        self.messages = lst_msg + self.messages[:self.window.height-len(lst_msg)]
         #for i in enumerate(reversed(range(len(self.messages)))):
         for i in range(len(self.messages)):
             #index = len(self.messages) - 1 - i
-            y = self.window.uly + self.height - i - 1
+            y = self.window.uly + self.window.height - i - 1
             self.scr.addstr(y, self.window.ulx, self.messages[i])
             
 
@@ -483,7 +612,8 @@ def main(stdscr):
         key = stdscr.getch()
         gb.update_field('stockprice-0', 67)
         key = stdscr.getch()
-        gb.sa.add_message('dude whats up')
+        for i in range(10):
+            gb.sa_mkt_act.add_message(f'{i} dude whats up')
         key = stdscr.getch()
         break
 
