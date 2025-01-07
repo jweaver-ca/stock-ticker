@@ -33,7 +33,7 @@ IDEA: Other players can be viewed as a separate window??  window right edge can 
 | GRAIN      XXX     | XXXXXX |  -----0 | -       0 + |  GRAIN      DOWN  5  |                                                            |
 |-----------------------------|         |             |----------------------|                                         |
 | Cash:      $12000           | $     0 |  BLOCK SZ   |  NEXT ACTION IN:     |                                     |
-| Net Worth: $50000           |         | -     500 + |       0:30           |                                       |
+| Net Worth: $50000           |         | [     500 ] |       0:30           |                                       |
 |-----------------------------+---------+------------------------------------+
 | <game message window - no heading>
 |
@@ -70,6 +70,4 @@ info.  Once this call has been recieved by a client, buy/sell operations should 
 full request sent to the server. Server then processes all the operations from all players and sends
 confirmations to all cients.  Once all clients have confirmations sent, the die roll is executed
 and reported to the clients, at which point buy/sell operations can be enabled again.
-Each time a transaction (tx) is requested by the client,
-a message wil
 

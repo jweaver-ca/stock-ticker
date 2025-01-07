@@ -1,4 +1,5 @@
 import curses
+import curses.panel
 import textwrap
 
 class GameBoard(object):
@@ -91,7 +92,7 @@ class GameBoard(object):
         self.win_market = Window(self.win_top.BY()+2, self.win_main.LX(), 11, 34) # uly, ulx, h, w
 
         # buysell
-        self.win_buysell = Window(self.win_top.BY()+2, self.win_market.RX()+2, self.win_market.height, 32) # uly, ulx, h, w 
+        self.win_buysell = Window(self.win_top.BY()+2, self.win_market.RX()+2, self.win_market.height, 24) # uly, ulx, h, w 
 
         # mkt_act (market activity)
         self.win_mkt_act = Window(self.win_top.BY()+2, self.win_buysell.RX()+2, self.win_market.height, 22)
@@ -222,7 +223,7 @@ class GameBoard(object):
         xdiv = xprice + len_stockprice + 1
         xminus = xdiv + 3
         xowned = xminus + 2
-        lenowned = 6
+        lenowned = 6 # num of digits allowed for owned
         xplus = xowned + lenowned + 2
         self.ul_stockprice = (yoff, xprice) # store upper left of stock prices
         for i, stockname in enumerate(self.stock_names):
@@ -236,10 +237,10 @@ class GameBoard(object):
         #self._draw_hline(dict_border_cells, self.win_market, 1)
         self.win_market.draw_hline(dict_border_cells, 2)
         self.win_market.draw_hline(dict_border_cells, 9)
-        str_market1 = 'MARKET VAL/DIV'
+        str_market1 = 'MARKET VAL/DIV       OWNED'
         str_cash = 'Cash:      $'
         str_net_worth = 'Net Worth: $'
-        self.add_text(self.win_market, 0, 6, str_market1)
+        self.add_text(self.win_market, 0, 4, str_market1)
         ycash = yoff+len(self.stock_names)+1
         self.add_text(self.win_market, ycash, 1, str_cash)
         self.add_text(self.win_market, ycash+1, 1, str_net_worth)
@@ -254,12 +255,22 @@ class GameBoard(object):
         win.draw_vline(dict_border_cells, midx)
         str_pending = 'PENDING'
         str_block = '$/BLOCK'
+        str_blocksz = 'BLOCK SZ'
         self.add_text_field(win, 0, 0, midx, str_pending, '^')
         self.add_text_field(win, 0, midx, midx, str_block, '^')
         width_pending = midx - 3 # (-1 because a line is there, and -1 for a space on each side)
+        width_blockprice = width_pending # blockprice should always be wider so this is safe... right?
         yoff = 2
         for i, stockname in enumerate(self.stock_names):
             self._add_field(f'pending-{i}', self.win_buysell, yoff+i, 1, width_pending, '>', initval=0)
+            self._add_field(f'blockprice-{i}', self.win_buysell, yoff+i, midx + 2, width_blockprice, '>', initval=0)
+        ybot = yoff + len(self.stock_names) + 1 # top row of bottom section of window
+        self.add_text(win, ybot, 1, '$') # label for dollar amount under pending
+        self._add_field('pending-$', self.win_buysell, ybot, 2, width_pending-1, '>', initval=0)
+        self.add_text_field(win, ybot, midx, midx, str_blocksz, '^')
+        self.add_text(win, ybot+1, midx+1, '[')
+        self.add_text(win, ybot+1, win.width-2, ']')
+        self._add_field('blocksz', self.win_buysell, ybot+1, midx+4, 5, '>', initval=500)
         
     def _init_draw_mkt_act(self, dict_border_cells):
         win = self.win_mkt_act
@@ -635,6 +646,16 @@ def main(stdscr):
         for i in range(10):
             gb.sa_mkt_act.add_message(f'{i} dude whats up')
         key = stdscr.getch()
+        testwin = curses.newwin(20, 20, 5, 5)
+        testwin.addstr(3, 3, 'TEST')
+        testwin.refresh()
+        key = stdscr.getch()
+        stdscr.redrawwin()
+        #stdscr.noutrefresh()
+        #stdscr.refresh()
+        curses.doupdate()
+        key = stdscr.getch()
+
         break
 
 if __name__ == "__main__":
