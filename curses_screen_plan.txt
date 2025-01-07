@@ -21,40 +21,36 @@ IDEA: Other players can be viewed as a separate window??  window right edge can 
 +----------------------------------------------------------------------------------------------------------------------+
 |                                          -= S T O C K   T I C K E R =-
 | Status: not connected
+| Players: Fred, Marshmellow, Perkins
 +----------------------------------------------------------------------------------------------------------------------+
-|   MARKET VAL/DIV   | OWNED  | PENDING |   $/BLOCK   |     MARKET ACTIVITY  |       PLAYERS
-|--------------------+--------+---------+-------------+----------------------+-----------------------------------------
-| GOLD       XXX  ✓  | XXXXXX |  -----0 | -       0 + |  INDUSTRIAL DOWN 20  | Fred    $                                                        |
+|   MARKET VAL/DIV   | OWNED  | PENDING |   $/BLOCK   |     MARKET ACTIVITY  | 
+|--------------------+--------+---------+-------------+----------------------|
+| GOLD       XXX  ✓  | XXXXXX |  -----0 | -       0 + |  INDUSTRIAL DOWN 20  | 
 | SILVER     XXX  ✓  | XXXXXX |  -----0 | -       0 + |  GOLD         UP  5  |                                                            |
 | INDUSTRIAL XXX  ✓  | XXXXXX |  -----0 | -       0 + |  OIL         DIV 10  |                                                            |
 | BONDS      XXX     | XXXXXX |  -----0 | -       0 + |  ....                |                                                            |
 | OIL        XXX  ✓  | XXXXXX |  -----0 | -       0 + |  GRAIN      DOWN  5  |                                                            |
 | GRAIN      XXX     | XXXXXX |  -----0 | -       0 + |  GRAIN      DOWN  5  |                                                            |
-|-----------------------------+---------+-------------+----------------------|                                         |
+|-----------------------------|         |             |----------------------|                                         |
 | Cash:      $12000           | $     0 |  BLOCK SZ   |  NEXT ACTION IN:     |                                     |
 | Net Worth: $50000           |         | -     500 + |       0:30           |                                       |
 |-----------------------------+---------+------------------------------------+
-| GAME MESSAGES
-+---------------------------------------------------------------------------
+| <game message window - no heading>
+|
 | Player 3 shat bricks                                                                                                                                           |
 | Player1 bought GOLD                                                                                                                                            |
 | Player2 sold INDUSTRIAL                                                                                                                                           |
 | BONDS has split!                                                                                                                           |
-|                                                                                                                                            |
-|------------------------------                                                                                                              |
-|                                                                                                                                            |
-| +---------------------------------------                                                                                                   |
-| | Player1: I'm gonna kick you're ass!                                                                                |
-| | Player2: Your a little bitch!                                                                                      |
-| |                                                                                                                    |
-| |                                                                                                                    |
-| |                                                                                                                    |
-| |                                                                                                                    |
-| +-------------------------------------------                                                                         |
-|                                                                                                                      |
-|                                                                                                                      |
-|          REQUEST PAUSE            QUIT/FORFEIT                                                                       |
-|                                                                                                                      |
+| Player1: I'm gonna kick you're ass!                                                                                |
+| Player2: Your a little bitch!                                                                                      |
+|                                                                                                                    |
+|                                                                                                                    |
+|                                                                                                                    |
+|                                                                                                                    |
++--------------------------------------------------------------------------------------------------------------------- |
+| > ...enter a chat message here after pressing 'M'                                                                                                                    |
++----------------------------------------------------------------------------------------------------------------------+
+| [M]essage  [R]equest Pause  [Q]uit                                                                                   |
 +----------------------------------------------------------------------------------------------------------------------+
 
 approx amounts (shown to hide secrets)

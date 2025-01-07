@@ -96,6 +96,19 @@ class GameBoard(object):
         # mkt_act (market activity)
         self.win_mkt_act = Window(self.win_top.BY()+2, self.win_buysell.RX()+2, self.win_market.height, 22)
 
+        # bottom of screen
+        # hotkey
+        self.win_hotkey = Window(self.win_main.BY(), self.win_main.LX(), 1, self.win_main.width) 
+        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]equest Pause  [Q]uit')
+
+        # chatmsg - entry window for typing chat message to other players
+        self.win_chatmsg = Window(self.win_hotkey.TY()-2, self.win_main.LX(), 1, self.win_main.width) 
+        self.add_text(self.win_chatmsg, 0, 1, '>')
+        # TODO: create some kind of 'text_entry' field to add after '>' where chat messages type in
+
+        # sysmsg - system/game/chat messages
+        self.win_sysmsg = Window(self.win_market.BY()+2, self.win_main.LX(), self.win_chatmsg.TY()-self.win_market.BY()-1, self.win_main.width) 
+
 
         dict_border_cells = dict() # key = tuple (y,x), value = 
         GameBoard.apply_border(self.win_main, dict_border_cells)
@@ -103,10 +116,17 @@ class GameBoard(object):
         GameBoard.apply_border(self.win_market, dict_border_cells)
         GameBoard.apply_border(self.win_buysell, dict_border_cells)
         GameBoard.apply_border(self.win_mkt_act, dict_border_cells)
+        GameBoard.apply_border(self.win_hotkey, dict_border_cells)
+        GameBoard.apply_border(self.win_sysmsg, dict_border_cells)
+        GameBoard.apply_border(self.win_chatmsg, dict_border_cells)
 
         self._init_draw_market(dict_border_cells)
         self._init_draw_buysell(dict_border_cells)
         self._init_draw_mkt_act(dict_border_cells)
+
+        #NOTE: I don't like the heading, and it takes up too much room
+        #self.win_sysmsg.draw_hline(dict_border_cells, 2)
+        #self.add_text(self.win_sysmsg, 0, 1, 'SYSTEM MESSAGES')
 
         # last thing after all windows have drawn their lines, borders, etc
         self.draw_border(dict_border_cells)
