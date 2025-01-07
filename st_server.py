@@ -8,6 +8,8 @@
             > if lower price, always. if higher price ...??
         - make this a client setting?
 '''
+# (useless comment from andrea)
+#
 # from: https://stackoverflow.com/questions/7749341/basic-python-client-socket-example
 # modified for python3
 
