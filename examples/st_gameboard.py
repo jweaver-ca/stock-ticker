@@ -159,6 +159,9 @@ class GameBoard(object):
             width = ref_win.width
         return Window(ref_win.BY()+2, ref_win.LX(), height, width)
 
+    def show_modal(self, wdialog):
+        pass
+
     def update_stock_price(self, i_stock, new_price, bln_pays_div):
         if new_price > self.max_stock_price:
             raise ValueError(f"[{new_price}] too high to display")
@@ -649,6 +652,7 @@ class ScrollArea(object):
         self.firsty = self.window.uly + self.window.height # bottom line (first)
         print (self.window.dimensions())
 
+
     def add_message(self, str_message):
         lst_msg = [ f"{x:<{self.window.width}}" for x in textwrap.wrap(str_message,width=self.window.width)][::-1]
         self.messages = lst_msg + self.messages[:self.window.height-len(lst_msg)]
@@ -658,6 +662,38 @@ class ScrollArea(object):
             y = self.window.uly + self.window.height - i - 1
             self.scr.addstr(y, self.window.ulx, self.messages[i])
             
+class Dialog():
+    '''
+    A Dialog is a pop-up window that will show over the GameBoard when it's activated.
+    It will have an ncurses Window (or panel?) as its main data member. Dialog objects
+    will always (I think?) be shown modal i.e. input will not be processed by the game
+    anymore, only the Dialog, until it is closed.
+
+    This class will be curses-aware i.e. it will create the window via curses.newwin()
+
+    NOTE: in curses, getch() is a Window function.  We *can* use the underlying window
+    in Dialog objects to call .getch() while the Dialog is showing - but this does not
+    really appear to be necessary.  It will just help organize the scripts that handle
+    the calls to getch(). 
+    '''
+    def __init__(self, height, width):
+        '''
+        win: creates a new window using given height and width for size. Places it 
+        centered in the terminal window
+        '''
+        self.win = curses.newwin(height, width, int((curses.LINES-height)/2), 
+                int((curses.COLS-width)/2))
+
+    def show(self, parentwin):
+        '''
+        parentwin: usualy ncurses stdscr i.e. the window that is passing input control to
+        this Dialog and the window that will be redrawn and shown again when the Dialog
+        closes
+        '''
+        self.win.refresh()
+        self.win.getch()
+        parentwin.redrawwin()
+        parentwin.refresh()
 
 def main(stdscr):
     curses.curs_set(0)
@@ -685,6 +721,13 @@ def main(stdscr):
         #stdscr.refresh()
         #curses.doupdate()
         key = stdscr.getch()
+
+        dlg1 = Dialog(10, 30)
+        dlg1.win.box()
+        dlg1.win.addstr(2, 4, 'whats up man')
+        dlg1.show(stdscr)
+        key = stdscr.getch()
+
 
         break
 

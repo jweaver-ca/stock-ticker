@@ -71,3 +71,36 @@ full request sent to the server. Server then processes all the operations from a
 confirmations to all cients.  Once all clients have confirmations sent, the die roll is executed
 and reported to the clients, at which point buy/sell operations can be enabled again.
 
+--------------------------------------------------------------------------------
+                            INPUTS ON THE GAMEBOARD
+--------------------------------------------------------------------------------
+The GameBoard's default input mode should be 'hotkey' mode which allows for the games
+global hotkeys to have immediate effects and for one button group (see Buttons below)
+to be active (arrow keys, space, enter)
+
+'text-entry' mode will be entered by certain hotkeys whose actions require text/string
+entry by the user (e.g. typing a chat message).   
+
+'dialog' mode will disable 'hotkey' mode while the window is visible. (as of Jan 8 25
+nothing is even implemented yet) It's possible some modal dialog windows will also 
+have their own buttons and/or text fields requiring text input.
+
+Buttons
+-------
+GameBoard will (should) have the idea of clickable buttons. Not with the mouse (yet)
+but with the keyboard. Buttons can be pressed by <Enter> or <Space> when it is 'active'.
+An active Button should have reverse video to indcate it's active. 
+- Only one button can be active at a time
+- Arrow keys should navigate active buttons.
+- Should be a concept of Groups, such that navigation stays within a group
+- There can be lettered hotkeys to activate a group
+- Possibly <Tab> can rotate around groups
+
+Hotkeys
+-------
+Letter/number keys can various actions associated with them.
+
+Chat
+-------
+TYping a chat message will disable hotkeys and we'll use the ncurses window.getstr() 
+facility. Hitting enter sends the chat and puts the game back into 'hotkey' mode.
