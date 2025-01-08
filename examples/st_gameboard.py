@@ -89,13 +89,13 @@ class GameBoard(object):
         self._add_field("players", self.win_top, 2, len(str_players) + 1, self.win_top.width - len(str_status) -1, initval='???', justify='<')
 
         # Market section
-        self.win_market = Window(self.win_top.BY()+2, self.win_main.LX(), 11, 34) # uly, ulx, h, w
+        self.win_market = self.add_window_below(self.win_top, 11, 34)
 
         # buysell
-        self.win_buysell = Window(self.win_top.BY()+2, self.win_market.RX()+2, self.win_market.height, 24) # uly, ulx, h, w 
+        self.win_buysell = self.add_window_right(self.win_market, None, 24)
 
         # mkt_act (market activity)
-        self.win_mkt_act = Window(self.win_top.BY()+2, self.win_buysell.RX()+2, self.win_market.height, 22)
+        self.win_mkt_act = self.add_window_right(self.win_buysell, None, 22)
 
         # bottom of screen
         # hotkey
@@ -132,6 +132,32 @@ class GameBoard(object):
         # last thing after all windows have drawn their lines, borders, etc
         self.draw_border(dict_border_cells)
 
+
+    def add_window_right(self, ref_win, height=None, width=None):
+        '''
+        Convenience method for adding a new Window located relative to an existing
+        Window rather than specify the dimensions.  This window will be placed
+        directly to the right of ref_win aligned along the top edge. If height or
+        width are None or omitted, copy them from ref_win for this new window
+        '''
+        if height is None:
+            height = ref_win.height
+        if width is None:
+            width = ref_win.width
+        return Window(ref_win.TY(), ref_win.RX()+2, height, width)
+
+    def add_window_below(self, ref_win, height, width):
+        '''
+        Convenience method for adding a new Window located relative to an existing
+        Window rather than specify the dimensions.  This window will be placed
+        directly below ref_win aligned along the left edge. If height or width are
+        None or omitted, copy them from ref_win for this new window
+        '''
+        if height is None:
+            height = ref_win.height
+        if width is None:
+            width = ref_win.width
+        return Window(ref_win.BY()+2, ref_win.LX(), height, width)
 
     def update_stock_price(self, i_stock, new_price, bln_pays_div):
         if new_price > self.max_stock_price:
@@ -439,6 +465,10 @@ class Window(object):
 
     This idea is to aid in changing the layout of the GameBoard by allowing the Window's
     to manage their own internal structure, placing and updating of fields, etc.
+    
+    Window objects will be passed by the gameboard into its functions for adding text, fields,
+    etc. onto the board to allow placement relative to the window's location, rather than the
+    whole board.  Window objects will not serve much other purpose.
 
     The dimensions described by uly, ulx, h, w are the *inner* part of the window but there should
     be a 1-char-wide border left around it for the GameBoard to draw border lines between adjecent
@@ -653,7 +683,7 @@ def main(stdscr):
         stdscr.redrawwin()
         #stdscr.noutrefresh()
         #stdscr.refresh()
-        curses.doupdate()
+        #curses.doupdate()
         key = stdscr.getch()
 
         break
