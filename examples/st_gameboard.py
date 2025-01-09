@@ -2,6 +2,11 @@ import curses
 import curses.panel
 import textwrap
 
+# for debugging only. remove when done with it
+lst_log = []
+def log(msg):
+    lst_log.append(str(msg))
+
 class GameBoard(object):
     '''
     List of stock names provided for init.  GameBoard will only deal stocks via the integer value of the
@@ -71,6 +76,7 @@ class GameBoard(object):
         self.stock_names = lst_stock_names
 
         self.fields = dict() # Field objects
+        self.coords = dict() # named coordinate locations
 
         # lets try a virtual window or two...
         #self.win_market = (1, 1, 11, 34) # uly, ulx, h, w
@@ -104,7 +110,10 @@ class GameBoard(object):
 
         # chatmsg - entry window for typing chat message to other players
         self.win_chatmsg = Window(self.win_hotkey.TY()-2, self.win_main.LX(), 1, self.win_main.width) 
-        self.add_text(self.win_chatmsg, 0, 1, '>')
+        self.add_text(self.win_chatmsg, 0, 1, '>') # TODO: add_text should be 1-based and allow negatives
+        self._add_coord('input-chat', self.win_chatmsg, 1, 4)
+        width_chatmsg_in = self.win_chatmsg.RX() - self.get_coord('input-chat').X
+        self.win_chatmsg_in = self.scr.subwin(1, width_chatmsg_in, *self.get_coord('input-chat').val())
         # TODO: create some kind of 'text_entry' field to add after '>' where chat messages type in
 
         # sysmsg - system/game/chat messages
@@ -385,14 +394,50 @@ class GameBoard(object):
             GameBoard._border_cell_val(key, brdr_val, dict_border_cells)
 
     def _add_field(self, name, win, offsety, offsetx, length, justify='<', initval=None):
+        # TODO: offsety/x should allow negative and be 1-based. not 0
         if name in self.fields:
             raise ValueError(f"Field with name [{name}] already exists")
         self.fields[name] = Field(win, offsety, offsetx, length, justify)
         if initval is not None:
             self.update_field(name, initval)
 
+    def _add_coord(self, name, win, y, x):
+        '''
+        store a named coordinate (YXCoord) on the board relative to the given
+        window.
+        y, x: 1-based offset from upper-left corner of window (i.e. 1, 1 is
+            the top-left corner)
+        if y and/or x are negative, it's from the opposite side
+        '''
+        if name in self.coords:
+            raise ValueError(f"Coord with name [{name}] already exists")
+        if y == 0 or x == 0:
+            raise ValueError(f"y,x cannot be zero. got ({y}, {x})")
+        # get 0-based offset from windows edges
+        thisy = win.TY()+y-1 if y>0 else win.BY() - abs(y) + 1
+        thisx = win.LX()+x-1 if x>0 else win.RX() - abs(x) + 1
+        self.coords[name] = YXCoord(thisy, thisx)
+
+    def get_coord(self, name):
+        return self.coords[name]
+
     def update_field(self, name, newval):
         self.fields[name].update(self.scr, newval)
+
+    def input_chat_message(self):
+        # NOTE: getstr really has to go in a curses window proper, else the entry
+        #   ruins stuff to the right that's in the same window
+        curses.echo()
+        curses.curs_set(1)
+        msg = self.win_chatmsg_in.getstr()
+        self.win_chatmsg_in.erase()
+        curses.curs_set(0)
+        curses.noecho()
+        # NOTE: refresh required to clear out the contents and hide the cursor, etc
+        self.win_chatmsg_in.refresh()
+        # TODO: actually send the dang message
+
+    # --END class GameBoard
 
 class YXCoord(object):
     '''
@@ -684,14 +729,20 @@ class Dialog():
         self.win = curses.newwin(height, width, int((curses.LINES-height)/2), 
                 int((curses.COLS-width)/2))
 
+    # NOTE: I'm thinking you could sub-class Dialog and override the run function
+    # to do something more complicated, return a value, etc.
+    def run(self):
+        return self.win.getch() # return the key pressed for no good reason...
+
     def show(self, parentwin):
         '''
         parentwin: usualy ncurses stdscr i.e. the window that is passing input control to
         this Dialog and the window that will be redrawn and shown again when the Dialog
         closes
         '''
-        self.win.refresh()
-        self.win.getch()
+        self.win.refresh() # once updates, if any, made. refresh to show the dialog
+        # a sub-class
+        self.run()
         parentwin.redrawwin()
         parentwin.refresh()
 
@@ -726,11 +777,12 @@ def main(stdscr):
         dlg1.win.box()
         dlg1.win.addstr(2, 4, 'whats up man')
         dlg1.show(stdscr)
+        gb.input_chat_message()
         key = stdscr.getch()
-
-
         break
 
 if __name__ == "__main__":
     # curses.wrapper
     curses.wrapper(main)
+    for l in lst_log:
+        print(l)
