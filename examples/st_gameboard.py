@@ -86,7 +86,7 @@ class GameBoard(object):
         # Top section
         self.win_top = Window(self.win_main.TY(), self.win_main.LX(), 3, self.win_main.width)
         str_title = '-=  S T O C K   T I C K E R  =-'
-        self.add_text_field(self.win_top, 0, 0, self.win_top.width, str_title, justify='^')
+        self.add_text(self.win_top, 0, 0, str_title, self.win_top.width, justify='^')
         str_status = 'Status: '
         str_players = 'Players: '
         self.add_text(self.win_top, 1, 1, str_status)
@@ -110,11 +110,10 @@ class GameBoard(object):
 
         # chatmsg - entry window for typing chat message to other players
         self.win_chatmsg = Window(self.win_hotkey.TY()-2, self.win_main.LX(), 1, self.win_main.width) 
-        self.add_text(self.win_chatmsg, 0, 1, '>') # TODO: add_text should be 1-based and allow negatives
-        self._add_coord('input-chat', self.win_chatmsg, 1, 4)
+        self.add_text(self.win_chatmsg, 0, 1, '>')
+        self._add_coord('input-chat', self.win_chatmsg, 0, 3)
         width_chatmsg_in = self.win_chatmsg.RX() - self.get_coord('input-chat').X
-        self.win_chatmsg_in = self.scr.subwin(1, width_chatmsg_in, *self.get_coord('input-chat').val())
-        # TODO: create some kind of 'text_entry' field to add after '>' where chat messages type in
+        self.cwin_chatmsg_in = self.scr.subwin(1, width_chatmsg_in, *self.get_coord('input-chat').val())
 
         # sysmsg - system/game/chat messages
         self.win_sysmsg = Window(self.win_market.BY()+2, self.win_main.LX(), self.win_chatmsg.TY()-self.win_market.BY()-1, self.win_main.width) 
@@ -169,6 +168,7 @@ class GameBoard(object):
         return Window(ref_win.BY()+2, ref_win.LX(), height, width)
 
     def show_modal(self, wdialog):
+        # NOTE: this can probably be removed, but I'm not sure yet
         pass
 
     def update_stock_price(self, i_stock, new_price, bln_pays_div):
@@ -218,7 +218,7 @@ class GameBoard(object):
             else:
                 self.scr.addch(*key, brdr_char)
         
-    def add_text(self, win, y, x, text):
+    def add_text(self, win, y, x, text, width=None, justify=None):
         '''
         Add text to GameBoard inside the given Window
         win: Window to add text to
@@ -226,25 +226,24 @@ class GameBoard(object):
             -1 indicating the bottom-most line
         x: if 0+, offset from left of window.  If -1 or less, offset from right of window,
             -1 indicating the right-most column. text *ends* at this point
+        width and justify must be both be given or neither.  justify is one of '<', '^', '>'
+            and width is the length of the field to justify the the within.
         '''
+        if width is not None:
+            if justify not in ['<', '^', '>']:
+                raise ValueError(f"Invalid value for justify [{justify}]")
+            str_text = f"{text:{justify}{width}s}"
+        else:
+            if justify is not None:
+                raise ValueError(f"Must provide width along with justify")
+            str_text = str(text)
+            
         (thisy, thisx) = (y, x)
         if y < 0:
             thisy = win.height - (abs(y)-1) - 1
         if x < 0:
-            thisx = win.width - (abs(x)-1) - len(text)
-        self.scr.addstr(win.uly+thisy, win.ulx+thisx, text)
-
-    def add_text_field(self, win, y, x, width, text, justify):
-        # TODO: 'field' might be bad choice of words, because 'field' has been referring to an
-        #       updatable area of the gameboard.  This is not updateable. Find another name
-        #       to indicate it requires width and justify...
-        '''
-        Similar to add_text except width is provided and has facilities for justification 
-        '''
-        if justify not in ['<', '^', '>']:
-            raise ValueError(f"Invalid value for justify [{justify}]")
-        str_text = f"{text:{justify}{width}s}"
-        self.add_text(win, y, x, str_text)
+            thisx = win.width - (abs(x)-1) - len(str_text)
+        self.scr.addstr(win.uly+thisy, win.ulx+thisx, str_text)
 
     def _border_cell_val(key, value, dict_border_cells):
         if not key in dict_border_cells:
@@ -294,8 +293,8 @@ class GameBoard(object):
         str_pending = 'PENDING'
         str_block = '$/BLOCK'
         str_blocksz = 'BLOCK SZ'
-        self.add_text_field(win, 0, 0, midx, str_pending, '^')
-        self.add_text_field(win, 0, midx, midx, str_block, '^')
+        self.add_text(win, 0, 0, str_pending, midx, '^')
+        self.add_text(win, 0, midx, str_block, midx, '^')
         width_pending = midx - 3 # (-1 because a line is there, and -1 for a space on each side)
         width_blockprice = width_pending # blockprice should always be wider so this is safe... right?
         yoff = 2
@@ -305,7 +304,7 @@ class GameBoard(object):
         ybot = yoff + len(self.stock_names) + 1 # top row of bottom section of window
         self.add_text(win, ybot, 1, '$') # label for dollar amount under pending
         self._add_field('pending-$', self.win_buysell, ybot, 2, width_pending-1, '>', initval=0)
-        self.add_text_field(win, ybot, midx, midx, str_blocksz, '^')
+        self.add_text(win, ybot, midx, str_blocksz, midx, '^')
         self.add_text(win, ybot+1, midx+1, '[')
         self.add_text(win, ybot+1, win.width-2, ']')
         self._add_field('blocksz', self.win_buysell, ybot+1, midx+4, 5, '>', initval=500)
@@ -318,16 +317,17 @@ class GameBoard(object):
         str_next_action = 'NEXT ACTION IN:'
         if len(str_head) > win.width:
             raise ValueError(f"Title [{str_head}] too long for window")
-        self.add_text_field(win, 0, 0, win.width, str_head, justify='^')
+        self.add_text(win, 0, 0, str_head, win.width, justify='^')
         xlowline = -3
         win.draw_hline(dict_border_cells, xlowline)
-        self.add_text_field(win, -2, 0, win.width, str_next_action, justify='^')
+        self.add_text(win, -2, 0, str_next_action, win.width, justify='^')
         # TODO: ScrollAreas, like labels maybe should be accessible by a name??
         self.sa_mkt_act = ScrollArea(self.scr, self.win_mkt_act, offset=(1,2,1,3))
         self._add_field('next-action', win, win.height-1, 1, win.width-2, justify='^', initval="00:00.0")
 
         
     def _draw_hline(self, dict_border_cells, win, yfromborder, from_side_borders=None):
+        # NOTE: not used and probably can be removed. Use Window.draw_hline
         '''
         Draw a horizontal line in the given window (win)
         Must be called during init phase before GameBoard calls draw_border
@@ -363,6 +363,7 @@ class GameBoard(object):
             #print (f"{key} {brdr_val} {dict_border_cells[key]}")
 
     def _draw_vline(self, dict_border_cells, win, xfromborder, from_tb_borders=(0,0)):
+        # NOTE: not used and probably can be removed. Use Window.draw_vline
         '''
         Draw a vertical line in the given window (win)
         Must be called during init phase before GameBoard calls draw_border
@@ -393,11 +394,11 @@ class GameBoard(object):
                 brdr_val &= ~self.BRDR_DOWN
             GameBoard._border_cell_val(key, brdr_val, dict_border_cells)
 
-    def _add_field(self, name, win, offsety, offsetx, length, justify='<', initval=None):
-        # TODO: offsety/x should allow negative and be 1-based. not 0
+    def _add_field(self, name, win, y, x, length, justify='<', initval=None):
+        # TODO: y/x should allow negative and be 1-based. not 0
         if name in self.fields:
             raise ValueError(f"Field with name [{name}] already exists")
-        self.fields[name] = Field(win, offsety, offsetx, length, justify)
+        self.fields[name] = Field(win, y, x, length, justify)
         if initval is not None:
             self.update_field(name, initval)
 
@@ -405,17 +406,16 @@ class GameBoard(object):
         '''
         store a named coordinate (YXCoord) on the board relative to the given
         window.
-        y, x: 1-based offset from upper-left corner of window (i.e. 1, 1 is
+        y, x: 0-based offset from upper-left corner of window (i.e. 0, 0 is
             the top-left corner)
-        if y and/or x are negative, it's from the opposite side
+        if y and/or x are negative, it's 1-based from the opposite side i.e
+            (-1, -1) is the bottom-right
         '''
         if name in self.coords:
             raise ValueError(f"Coord with name [{name}] already exists")
-        if y == 0 or x == 0:
-            raise ValueError(f"y,x cannot be zero. got ({y}, {x})")
         # get 0-based offset from windows edges
-        thisy = win.TY()+y-1 if y>0 else win.BY() - abs(y) + 1
-        thisx = win.LX()+x-1 if x>0 else win.RX() - abs(x) + 1
+        thisy = win.TY()+y if y>=0 else win.BY() - abs(y) + 1
+        thisx = win.LX()+x if x>=0 else win.RX() - abs(x) + 1
         self.coords[name] = YXCoord(thisy, thisx)
 
     def get_coord(self, name):
@@ -429,12 +429,12 @@ class GameBoard(object):
         #   ruins stuff to the right that's in the same window
         curses.echo()
         curses.curs_set(1)
-        msg = self.win_chatmsg_in.getstr()
-        self.win_chatmsg_in.erase()
+        msg = self.cwin_chatmsg_in.getstr()
+        self.cwin_chatmsg_in.erase()
         curses.curs_set(0)
         curses.noecho()
         # NOTE: refresh required to clear out the contents and hide the cursor, etc
-        self.win_chatmsg_in.refresh()
+        self.cwin_chatmsg_in.refresh()
         # TODO: actually send the dang message
 
     # --END class GameBoard
@@ -572,7 +572,7 @@ class Window(object):
         Draw a horizontal line in the given window (win)
         Must be called during init phase before GameBoard calls draw_border
         NOTE: Lines drawn in windows can connect to the outer border which is conceptually
-            outside the window's area
+            outside the window's area so the usual Window coordinate system isn't used.
         yfromborder: (1+) lines from top of window. 1 is directly below the top border
             negative means up from bottom border of window
         from_side_borders: optional 2-tuple (left,right) for spaces from the left/right edge
@@ -647,9 +647,6 @@ class Field(object):
     - length: number of chars
     - justify: '<', '>', '^' (left, right, center as in f-strings)
     '''
-    #TODO: offset here should be changed to 1-based so that we can also have
-    #      negative to indicate left/bottom relativity. Also it's consistent
-    #      with other offset type arguments in other places
     def __init__(self, win, offsety, offsetx, length, justify='<'):
         self.win = win
         self.y = win.uly+offsety
