@@ -1,6 +1,7 @@
 import curses
 import curses.panel
 import textwrap
+import traceback # I need to print debug logs if exception raised, but also see exception details
 
 # for debugging only. remove when done with it
 lst_log = []
@@ -116,8 +117,9 @@ class GameBoard(object):
         self.cwin_chatmsg_in = self.scr.subwin(1, width_chatmsg_in, *self.get_coord('input-chat').val())
 
         # sysmsg - system/game/chat messages
-        self.win_sysmsg = Window(self.win_market.BY()+2, self.win_main.LX(), self.win_chatmsg.TY()-self.win_market.BY()-1, self.win_main.width) 
-
+        height_sysmsg = self.win_chatmsg.TY()-self.win_market.BY()-3
+        self.win_sysmsg = Window(self.win_market.BY()+2, self.win_main.LX(), height_sysmsg, self.win_main.width) 
+        self.sa_sysmsg = ScrollArea(self.scr, self.win_sysmsg)
 
         dict_border_cells = dict() # key = tuple (y,x), value = 
         GameBoard.apply_border(self.win_main, dict_border_cells)
@@ -139,7 +141,15 @@ class GameBoard(object):
 
         # last thing after all windows have drawn their lines, borders, etc
         self.draw_border(dict_border_cells)
+        self.debug = False # show debugging msgs in the system message window if True
 
+    def dbg(self, msg):
+        '''
+        Simple debugging facility, shows msg in the system message window if debugging
+        enable in the GameBoard (.debug = True)
+        '''
+        if self.debug:
+            self.add_system_msg(f"[DEBUG]: {msg}")
 
     def add_window_right(self, ref_win, height=None, width=None):
         '''
@@ -179,6 +189,9 @@ class GameBoard(object):
         char_pays_div = "✓" if bln_pays_div else " "
         self.update_field(f'stockprice-{i_stock}', new_price)
         self.update_field(f'stockdiv-{i_stock}', char_pays_div)
+
+    def add_system_msg(self, msg):
+        self.sa_sysmsg.add_message(msg)
 
     def apply_border(win, dict_border_cells):
         '''
@@ -424,17 +437,28 @@ class GameBoard(object):
     def update_field(self, name, newval):
         self.fields[name].update(self.scr, newval)
 
-    def input_chat_message(self):
-        # NOTE: getstr really has to go in a curses window proper, else the entry
-        #   ruins stuff to the right that's in the same window
+    def read_str(curses_win):
+        # NOTE: this is a static method
+        '''
+        Just a wrapper to handle curses echoing, showing cursor etc while reading in a
+        string from the user
+        '''
         curses.echo()
         curses.curs_set(1)
-        msg = self.cwin_chatmsg_in.getstr()
-        self.cwin_chatmsg_in.erase()
+        msg = curses_win.getstr()
+        curses_win.erase()
         curses.curs_set(0)
         curses.noecho()
         # NOTE: refresh required to clear out the contents and hide the cursor, etc
-        self.cwin_chatmsg_in.refresh()
+        curses_win.refresh()
+        return msg
+
+    def input_chat_message(self):
+        # NOTE: getstr really has to go in a curses window proper, else the entry
+        #   ruins stuff to the right that's in the same window
+        chat_msg = GameBoard.read_str(self.cwin_chatmsg_in).decode('utf-8')
+        self.dbg(f"chat_sent: {chat_msg}")
+        return chat_msg
         # TODO: actually send the dang message
 
     # --END class GameBoard
@@ -663,8 +687,6 @@ class Field(object):
         str_fullval = f"{str_newval:{self.justify}{self.length}s}"
         scr.addstr(self.y, self.x, str_fullval)
 
-        
-
 class ScrollArea(object):
     '''
     Simple upwards scroll area (starts at bottom)
@@ -673,7 +695,7 @@ class ScrollArea(object):
     def __init__(self, scr, window, offset=None):
         '''
         scr: curses window (from GameBoard)
-        window: tuple (uly, ulx, h, w) where this will go
+        window: Window where this will go
         offset: tuple (left,up,right,down), if not given, all zeros (whole window)
         '''
         if offset is None:
@@ -696,6 +718,8 @@ class ScrollArea(object):
 
 
     def add_message(self, str_message):
+        #TODO: find a better/efficient way to clear lines besides formatting the string to fill with spaces on the right
+        #      mostly its just confusing why this formatting is done...
         lst_msg = [ f"{x:<{self.window.width}}" for x in textwrap.wrap(str_message,width=self.window.width)][::-1]
         self.messages = lst_msg + self.messages[:self.window.height-len(lst_msg)]
         #for i in enumerate(reversed(range(len(self.messages)))):
@@ -703,28 +727,49 @@ class ScrollArea(object):
             #index = len(self.messages) - 1 - i
             y = self.window.uly + self.window.height - i - 1
             self.scr.addstr(y, self.window.ulx, self.messages[i])
+        self.scr.refresh()
             
 class Dialog():
     '''
-    A Dialog is a pop-up window that will show over the GameBoard when it's activated.
-    It will have an ncurses Window (or panel?) as its main data member. Dialog objects
-    will always (I think?) be shown modal i.e. input will not be processed by the game
-    anymore, only the Dialog, until it is closed.
+    A Dialog is a pop-up window that will show over the GameBoard when it's
+    activated via show().  It will have an ncurses Window (or panel?) as its main
+    data member. Dialog objects will always (I think?) be shown modal i.e.
+    input will not be processed by the game anymore, only the Dialog, until it
+    is closed. It will always show centered in the screen
 
     This class will be curses-aware i.e. it will create the window via curses.newwin()
+    All Dialogs will be made of two curses windows: one for the padding/border, and the 
+    main window inside that which will have dynamic content.
+
+    borders and padding extend the area of the window past the given height, width in
+    the constructor. 1-char wide padding along x-axis is always added so with a border
+    the window will be 2 chars wider than given width
 
     NOTE: in curses, getch() is a Window function.  We *can* use the underlying window
     in Dialog objects to call .getch() while the Dialog is showing - but this does not
     really appear to be necessary.  It will just help organize the scripts that handle
     the calls to getch(). 
     '''
-    def __init__(self, height, width):
+    def __init__(self, height, width, border=True):
         '''
         win: creates a new window using given height and width for size. Places it 
         centered in the terminal window
+        border: if True, creates a border around the window increasing the true dimensions
+            of the window by 2 each way
         '''
-        self.win = curses.newwin(height, width, int((curses.LINES-height)/2), 
-                int((curses.COLS-width)/2))
+        w_border = 1 if border else 0
+        yx_pad = (0, 1) # NOTE: might make this adjustable in future
+        fulldim = (height + (w_border*2) + (yx_pad[0]*2), width + (w_border*2) + (yx_pad[1]*2))
+        fullpos = ( int((curses.LINES-(fulldim[0]))/2), int((curses.COLS-(fulldim[1]))/2) )
+        self.fullwin = curses.newwin(*fulldim, *fullpos)
+        if border:
+            pos = (w_border + yx_pad[0], w_border + yx_pad[1])
+            self.fullwin.box()
+            self.win = self.fullwin.derwin(height, width, *pos)
+        else:
+            self.win = self.fullwin.derwin(height, width, *yx_pad)
+        self.fullwin.refresh() # required to draw border/padding
+        self.dlg_val = None  # Dialogs will always be able to return a value
 
     # NOTE: I'm thinking you could sub-class Dialog and override the run function
     # to do something more complicated, return a value, etc.
@@ -737,16 +782,34 @@ class Dialog():
         this Dialog and the window that will be redrawn and shown again when the Dialog
         closes
         '''
+        # TODO-CONCERN: prove win.refresh() is enough to show dialog properly always
         self.win.refresh() # once updates, if any, made. refresh to show the dialog
         # a sub-class
-        self.run()
+        self.dlg_val = self.run()
         parentwin.redrawwin()
         parentwin.refresh()
+        return self.dlg_val
+
+class TextInputDialog(Dialog):
+    def __init__(self, prompt, dlg_width, input_len, border=True, validation=None):
+        # break up the prompt according to dlg_width
+        lst_prompt = textwrap.wrap(prompt, dlg_width)
+        height = len(lst_prompt) + 2
+        print (f"height: {height}")
+        super().__init__(height, dlg_width, border)
+        for i, prompt_part in enumerate(lst_prompt):
+            self.win.addstr(i, 0, prompt_part)
+        self.win_input = self.win.derwin(1, input_len, height-1, 0)
+        self.win_input.bkgd('_')
+
+    def run(self):
+        return GameBoard.read_str(self.win_input).decode('utf-8')
 
 def main(stdscr):
     curses.curs_set(0)
     lst_stock_names = ["GOLD", "SILVER", "INDUSTRIAL", "BONDS", "OIL", "GRAIN"]
     gb = GameBoard(stdscr, lst_stock_names)    
+    gb.debug = True
     #stdscr.border()
     while True:
         key = stdscr.getch()
@@ -760,26 +823,34 @@ def main(stdscr):
         for i in range(10):
             gb.sa_mkt_act.add_message(f'{i} dude whats up')
         key = stdscr.getch()
-        testwin = curses.newwin(20, 20, 5, 5)
-        testwin.addstr(3, 3, 'TEST')
-        testwin.refresh()
-        key = stdscr.getch()
-        stdscr.redrawwin()
-        #stdscr.noutrefresh()
-        #stdscr.refresh()
-        #curses.doupdate()
-        key = stdscr.getch()
 
-        dlg1 = Dialog(10, 30)
-        dlg1.win.box()
+        dlg1 = Dialog(10, 30, border=True)
+        #dlg1 = Dialog(10, 30)
         dlg1.win.addstr(2, 4, 'whats up man')
-        dlg1.show(stdscr)
-        gb.input_chat_message()
+        val = dlg1.show(stdscr)
+        gb.add_system_msg(f"dlg got: {val}")
+        chat_msg = gb.input_chat_message()
+        key = stdscr.getch()
+        prompt = 'Please enter your name:'
+        dlg2 = TextInputDialog(prompt, 40, 20)
+        name = dlg2.show(stdscr)
+        gb.add_system_msg(f"Name entered: {name}")
         key = stdscr.getch()
         break
 
 if __name__ == "__main__":
     # curses.wrapper
-    curses.wrapper(main)
-    for l in lst_log:
-        print(l)
+    if False:
+        try:
+            curses.wrapper(main)
+        except:
+            traceback.print_stack()
+        finally:
+            for l in lst_log:
+                print(l)
+    else:
+        # for when I need the stack trace more than the logs...
+        # TODO: figure out how to get BOTH...
+        curses.wrapper(main)
+        for l in lst_log:
+            print(l)
