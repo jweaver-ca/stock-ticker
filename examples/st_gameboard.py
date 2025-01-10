@@ -284,7 +284,7 @@ class GameBoard(object):
         lenowned = 6 # num of digits allowed for owned
         xplus = xowned + lenowned + 2
         self.ul_stockprice = (yoff, xprice) # store upper left of stock prices
-        self.buttongroups['buysell'] = ButtonGroup()
+        self._add_button_group('buysell')
         btn_names_for_nav = []
         for i, stockname in enumerate(self.stock_names):
             self.add_text(self.win_market, yoff+i, xoff, stockname)
@@ -299,8 +299,22 @@ class GameBoard(object):
             #self.add_text(self.win_market, yoff+i, xminus, '-')
             #self.add_text(self.win_market, yoff+i, xplus, '+')
             self._add_field(f'stockowned-{i}', self.win_market, yoff+i, xowned, lenowned, initval=0, justify='>')
-        for i, btn_name_sell, btn_name_buy in enumerate(btn_names_for_nav):
-            pass # TODO
+        for i, (btn_name_sell, btn_name_buy) in enumerate(btn_names_for_nav):
+            i_next = (i+1) % len(btn_names_for_nav)
+            i_prev = (i-1) % len(btn_names_for_nav)
+            self.buttongroups['buysell'].set_nav(btn_name_sell, 'right', btn_name_buy)
+            self.buttongroups['buysell'].set_nav(btn_name_sell, 'next', btn_name_buy)
+            self.buttongroups['buysell'].set_nav(btn_name_sell, 'up', f'sell-{i_prev}')
+            self.buttongroups['buysell'].set_nav(btn_name_sell, 'down', f'sell-{i_next}')
+            self.buttongroups['buysell'].set_nav(btn_name_sell, 'left', f'buy-{i_prev}')
+            self.buttongroups['buysell'].set_nav(btn_name_sell, 'prev', f'buy-{i_prev}')
+
+            self.buttongroups['buysell'].set_nav(btn_name_buy, 'right', f'sell-{i_next}')
+            self.buttongroups['buysell'].set_nav(btn_name_buy, 'next', f'sell-{i_next}')
+            self.buttongroups['buysell'].set_nav(btn_name_buy, 'up', f'buy-{i_prev}')
+            self.buttongroups['buysell'].set_nav(btn_name_buy, 'down', f'buy-{i_next}')
+            self.buttongroups['buysell'].set_nav(btn_name_buy, 'left', btn_name_sell)
+            self.buttongroups['buysell'].set_nav(btn_name_buy, 'prev', btn_name_sell)
             
         #self._draw_hline(dict_border_cells, self.win_market, 1)
         self.win_market.draw_hline(dict_border_cells, 2)
@@ -433,12 +447,17 @@ class GameBoard(object):
         if initval is not None:
             self.update_field(name, initval)
 
+    def _add_button_group(self, name):
+        if name in self.buttongroups:
+            raise ValueError(f"ButtonGroup '{name}' already exists")
+        self.buttongroups[name] = ButtonGroup(name)
+
     def _add_button(self, btn_group, name, label, data, win, y, x):
         '''
         Creates a new Button, adds it to the ButtonGroup btn_group, and draws
         it on the screen (it is non-active state)
         '''
-        btn = Button(win, y, x, label, data, btn_group)
+        btn = Button(win, y, x, name, label, data, btn_group)
         btn_group.add_button(btn, name)
         self.add_text(win, y, x, label)
 
@@ -464,6 +483,15 @@ class GameBoard(object):
     def update_field(self, name, newval):
         self.fields[name].update(self.scr, newval)
 
+    def activate_button_group(self, name):
+        if self.active_buttongroup:
+            curr_active = self.buttongroups[self.active_buttongroup]
+            curr_active.set_active(False)
+            self.update_button_group(curr_active.name)
+        self.active_buttongroup = name
+        self.buttongroups[name].set_active(True)
+        self.update_button_group(name)
+
     def update_button_group(self, name):
         '''
         Redraw all the buttons in the group based on whether or not they
@@ -474,12 +502,12 @@ class GameBoard(object):
         '''
         btngrp = self.buttongroups[name]
         for name, btn in btngrp.buttons.items():
-            if self.active_button.name == name and btngrp.is_active:
+            if btngrp.active_button.name == name and btngrp.is_active:
                 # TODO draw as active, reverse video of its label
                 self.scr.addstr(btn.y, btn.x, '*')
             else:
                 self.scr.addstr(btn.y, btn.x, btn.label)
-        self.scr.update()
+        self.scr.refresh()
 
     def read_str(curses_win):
         # NOTE: this is a static method
@@ -505,6 +533,9 @@ class GameBoard(object):
         return chat_msg
         # TODO: actually send the dang message
 
+    def nav(self, motion):
+        if self.active_buttongroup:
+            self.buttongroups[self.active_buttongroup].nav(motion)
     # --END class GameBoard
 
 class YXCoord(object):
@@ -870,7 +901,7 @@ class Button():
     arrow keys can select the 'next' button in the ButtonGroup.  Only one ButtonGroup
     can be active at a time. A ButtonGroup will need to be activated by a hot key.
     '''
-    def __init__(self, win, y, x, label, data, btn_group, fn_action=None):
+    def __init__(self, win, y, x, name, label, data, btn_group, fn_action=None):
         '''
         data: this button's argument(s) for the action
         label: the char or str showing on the screen
@@ -880,6 +911,7 @@ class Button():
         self.y = win.uly+y
         self.x = win.ulx+x
         self.data = data
+        self.name = name
         self.label = str(label)
         self.group = btn_group
         if fn_action is not None:
@@ -912,22 +944,28 @@ class ButtonGroup():
     '''
     NAV_VALS = ('up', 'down', 'left', 'right', 'prev', 'next')
 
-    def __init__(self, default_active_button=None):
+    def __init__(self, name):
+        self.name = name
         self.buttons = dict()
-        self.default_active_button = default_active_button
         self.active_button = None # object ref, not name
         self.is_active = False
         self.nav_info = dict() # key = Button name
 
-    def add_button(self, btn, name, win, y, x):
+    def add_button(self, btn, name):
         if name in self.buttons:
             raise ValueError(f"Button {name} already in ButtonGroup")
         self.buttons[name] = btn
-        self.nav_info[name] = {x: None for x in NAV_VALS}
+        self.nav_info[name] = {x: None for x in ButtonGroup.NAV_VALS}
+        if self.active_button is None:
+            self.active_button = btn
    
     # TODO/suspect: get/set_active_button probably not needed
-    def get_active_button(self):
+    def active_button(self):
         return self.active_button
+
+    def active_button_name(self):
+        if self.active_button:
+            return self.active_button
 
     def set_active_button(self, btn_name):
         self.active_button = self.buttons[btn_name]
@@ -936,9 +974,9 @@ class ButtonGroup():
         self.is_active = bln_active
    
     def set_nav(self, btn_from_name, motion, btn_to_name):
-        if motion not in NAV_VALS:
+        if motion not in ButtonGroup.NAV_VALS:
             raise ValueError(f"bad motion: [{motion}]")
-        self.nav_info[btn_from][motion] = btn_to
+        self.nav_info[btn_from_name][motion] = btn_to_name
 
     def nav(self, direction):
         #TODO:  apply navigation
@@ -957,9 +995,16 @@ def main(stdscr):
     #stdscr.border()
     while True:
         key = stdscr.getch()
+        gb.activate_button_group('buysell')
         if key in gb.keys_button_nav:
             if gb.active_buttongroup is not None:
-                pass
+                nav_lookup = {
+                    curses.KEY_UP: 'up',
+                    curses.KEY_DOWN: 'down',
+                    curses.KEY_RIGHT: 'right',
+                    curses.KEY_LEFT: 'left'
+                }
+                gb.nav(nav_lookup[key])
             else:
                 gb.dbg('no active button group')
             continue
