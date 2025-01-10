@@ -68,6 +68,11 @@ class GameBoard(object):
         15: BC_ALL      
     }
 
+    keys_button_nav = ( curses.KEY_UP,
+        curses.KEY_DOWN,
+        curses.KEY_LEFT,
+        curses.KEY_RIGHT
+    )
 
     def __init__(self, stdscr, lst_stock_names):
         self.scr = stdscr
@@ -78,6 +83,9 @@ class GameBoard(object):
 
         self.fields = dict() # Field objects
         self.coords = dict() # named coordinate locations
+
+        self.buttongroups = dict() # key = ButtonGroup name
+        self.active_buttongroup = None
 
         # lets try a virtual window or two...
         #self.win_market = (1, 1, 11, 34) # uly, ulx, h, w
@@ -276,14 +284,24 @@ class GameBoard(object):
         lenowned = 6 # num of digits allowed for owned
         xplus = xowned + lenowned + 2
         self.ul_stockprice = (yoff, xprice) # store upper left of stock prices
+        self.buttongroups['buysell'] = ButtonGroup()
+        btn_names_for_nav = []
         for i, stockname in enumerate(self.stock_names):
             self.add_text(self.win_market, yoff+i, xoff, stockname)
             self._add_field(f'stockprice-{i}', self.win_market, yoff+i, xprice, len_stockprice, '>', initval=0)
             self._add_field(f'stockdiv-{i}', self.win_market, yoff+i, xdiv, 1)
             # TODO: these +/- will have to be implemented as controls soon...
-            self.add_text(self.win_market, yoff+i, xminus, '-')
-            self.add_text(self.win_market, yoff+i, xplus, '+')
+            (btn_name_sell, btn_name_buy) = (f'sell-{i}', f'buy-{i}')
+            self._add_button(self.buttongroups['buysell'], btn_name_sell, '-', {'action':'sell', 'stock': i}, self.win_market, yoff+i, xminus)
+            self._add_button(self.buttongroups['buysell'], btn_name_buy, '+', {'action':'buy', 'stock': i}, self.win_market, yoff+i, xplus)
+            btn_names_for_nav.append((btn_name_sell, btn_name_buy))
+            #self.buttongroups['buysell'].add_button(Button('+', {action:'buy', stock: i}), f'buy-{i}', self.win_market, yoff+i, xplus)
+            #self.add_text(self.win_market, yoff+i, xminus, '-')
+            #self.add_text(self.win_market, yoff+i, xplus, '+')
             self._add_field(f'stockowned-{i}', self.win_market, yoff+i, xowned, lenowned, initval=0, justify='>')
+        for i, btn_name_sell, btn_name_buy in enumerate(btn_names_for_nav):
+            pass # TODO
+            
         #self._draw_hline(dict_border_cells, self.win_market, 1)
         self.win_market.draw_hline(dict_border_cells, 2)
         self.win_market.draw_hline(dict_border_cells, 9)
@@ -415,6 +433,15 @@ class GameBoard(object):
         if initval is not None:
             self.update_field(name, initval)
 
+    def _add_button(self, btn_group, name, label, data, win, y, x):
+        '''
+        Creates a new Button, adds it to the ButtonGroup btn_group, and draws
+        it on the screen (it is non-active state)
+        '''
+        btn = Button(win, y, x, label, data, btn_group)
+        btn_group.add_button(btn, name)
+        self.add_text(win, y, x, label)
+
     def _add_coord(self, name, win, y, x):
         '''
         store a named coordinate (YXCoord) on the board relative to the given
@@ -436,6 +463,23 @@ class GameBoard(object):
 
     def update_field(self, name, newval):
         self.fields[name].update(self.scr, newval)
+
+    def update_button_group(self, name):
+        '''
+        Redraw all the buttons in the group based on whether or not they
+        are active.
+
+        This will be called when a button navigation key is pressed so
+        a new Button becomes active/inactive.
+        '''
+        btngrp = self.buttongroups[name]
+        for name, btn in btngrp.buttons.items():
+            if self.active_button.name == name and btngrp.is_active:
+                # TODO draw as active, reverse video of its label
+                self.scr.addstr(btn.y, btn.x, '*')
+            else:
+                self.scr.addstr(btn.y, btn.x, btn.label)
+        self.scr.update()
 
     def read_str(curses_win):
         # NOTE: this is a static method
@@ -774,6 +818,8 @@ class Dialog():
     # NOTE: I'm thinking you could sub-class Dialog and override the run function
     # to do something more complicated, return a value, etc.
     def run(self):
+        # NOTE: if self.win doens't have keypad(True) set then arrow keys (for eg) will
+        #       will have no effect
         return self.win.getch() # return the key pressed for no good reason...
 
     def show(self, parentwin):
@@ -791,11 +837,17 @@ class Dialog():
         return self.dlg_val
 
 class TextInputDialog(Dialog):
+    '''
+    subclass of Dialog specifically meant for getting a small string value from
+    the user (e.g. username, server-host, etc)
+
+    height is determined automatically by divding up the given prompt according
+    to width, and making room for the input, etc
+    '''
     def __init__(self, prompt, dlg_width, input_len, border=True, validation=None):
         # break up the prompt according to dlg_width
         lst_prompt = textwrap.wrap(prompt, dlg_width)
         height = len(lst_prompt) + 2
-        print (f"height: {height}")
         super().__init__(height, dlg_width, border)
         for i, prompt_part in enumerate(lst_prompt):
             self.win.addstr(i, 0, prompt_part)
@@ -805,6 +857,98 @@ class TextInputDialog(Dialog):
     def run(self):
         return GameBoard.read_str(self.win_input).decode('utf-8')
 
+class Button():
+    '''
+    A Button is a single char on the gameboard that when 'clicked' will fire an 
+    associated action.  The GameBoard can only have one Button 'active' at a time
+    which is indicated by reverse video (highlighted). Pressing <space> or <enter>
+    'clicks' the GameBoard's currently active Button if there is one.
+
+    A Button's action is determined by callable fn_action, or if not given, the 
+    action of the ButtonGroup to which it belongs.  'data' is passed as 
+
+    arrow keys can select the 'next' button in the ButtonGroup.  Only one ButtonGroup
+    can be active at a time. A ButtonGroup will need to be activated by a hot key.
+    '''
+    def __init__(self, win, y, x, label, data, btn_group, fn_action=None):
+        '''
+        data: this button's argument(s) for the action
+        label: the char or str showing on the screen
+        btn_group: the ButtonGroup this Button belongs to (required if Button doesn't have
+            its own action assigned to it)
+        '''
+        self.y = win.uly+y
+        self.x = win.ulx+x
+        self.data = data
+        self.label = str(label)
+        self.group = btn_group
+        if fn_action is not None:
+            self.set_action(fn_action)
+
+    def click(self):
+        if self.action is None:
+            if self.group.action is None:
+                raise ValueError("Action has not been set")
+            else:
+                self.group.action(data)
+        else:
+            self.action(data)
+
+    def set_action(self, fn_action):
+        self.action = fn_action
+
+class ButtonGroup():
+    '''
+    The gameboard will manage button groups. The ButtonGroup objects will manage
+    the individual Buttons. When a user 'clicks' the button-activate key (space,
+    enter) the active ButtonGroup's active Button will get the click.
+
+    GameBoard will track if a ButtonGroup is active, but the ButtonGroup object itself
+    will track which button within it is active.
+
+    Concepts: 
+    GameBoard will not interact with ButtonGroup using button names, only through
+    navigation (left, right, up, down, next?) and pressing/clicking
+    '''
+    NAV_VALS = ('up', 'down', 'left', 'right', 'prev', 'next')
+
+    def __init__(self, default_active_button=None):
+        self.buttons = dict()
+        self.default_active_button = default_active_button
+        self.active_button = None # object ref, not name
+        self.is_active = False
+        self.nav_info = dict() # key = Button name
+
+    def add_button(self, btn, name, win, y, x):
+        if name in self.buttons:
+            raise ValueError(f"Button {name} already in ButtonGroup")
+        self.buttons[name] = btn
+        self.nav_info[name] = {x: None for x in NAV_VALS}
+   
+    # TODO/suspect: get/set_active_button probably not needed
+    def get_active_button(self):
+        return self.active_button
+
+    def set_active_button(self, btn_name):
+        self.active_button = self.buttons[btn_name]
+
+    def set_active(self, bln_active):
+        self.is_active = bln_active
+   
+    def set_nav(self, btn_from_name, motion, btn_to_name):
+        if motion not in NAV_VALS:
+            raise ValueError(f"bad motion: [{motion}]")
+        self.nav_info[btn_from][motion] = btn_to
+
+    def nav(self, direction):
+        #TODO:  apply navigation
+        #    set which is active, redraw?? prolly no
+        if not self.is_active:
+            raise ValueError(f"attempt to navigate inactive ButtonGroup")
+        new_active_btn_name = self.nav_info[self.active_button.name][direction]
+        if new_active_btn_name:
+            self.active_button = self.buttons[new_active_btn_name]
+
 def main(stdscr):
     curses.curs_set(0)
     lst_stock_names = ["GOLD", "SILVER", "INDUSTRIAL", "BONDS", "OIL", "GRAIN"]
@@ -813,6 +957,12 @@ def main(stdscr):
     #stdscr.border()
     while True:
         key = stdscr.getch()
+        if key in gb.keys_button_nav:
+            if gb.active_buttongroup is not None:
+                pass
+            else:
+                gb.dbg('no active button group')
+            continue
         gb.update_stock_price(2, 75, False)
         #stdscr.border()
         key = stdscr.getch()
