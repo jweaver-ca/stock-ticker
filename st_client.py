@@ -15,6 +15,7 @@ import struct
 import signal # trying to get KeyboardThread to interrupt main thread
 import datetime
 import types # SimpleNamespace for stock enum-ish construct?
+from st_gameboard import GameBoard
 
 try:
     import curses
@@ -38,7 +39,11 @@ args = parser.parse_args()
 gameserver = args.server
 
 # Could use Enum.. no real need I think...
+# TODO: decide if simplenamespace or just a plain old array of string for stocks...
+stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
 stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
+
+
 
 # simple message object/dictionary
 def msg(strType, strData):
@@ -51,42 +56,6 @@ def bmsg(strType, strData):
     sz = len(msgbytes)
     return struct.pack('I', sz) + msgbytes
 
-
-class GameBoard:
-    ''' GameBoard
-            This will provide facilities for graphical/visual updates to the state of the game
-            Including current stock prices, whether they pay dividends, the players cash, stock
-            holdings, and overall net worth(?)
-
-            Also will provide visual guides for purchasing/selling via highlights over stocks.
-            This class will not directly handle curses input, but can take requests by whichever
-            object does this
-
-    '''
-    def __init__(self, parentcurseswin):
-        '''
-            create a new subwin inside parentcurseswin. initialize the look.
-            TODO: provide a way to initialize values of various points
-        '''
-        pass
-
-    def current_selection(self):
-        '''
-            Return stock currently selected for purchase/sell.
-        '''
-        pass
-
-    def update_holdings(self, stock, value):
-        pass
-
-    def update_cash(self, value):
-        pass
-
-    def update_networth(self, value):
-        pass
-
-    def update_shareprice(self, value, bln_pays_div):
-        pass
 
 # ChatClient objects just receive bytes over a network connection and form them into
 # messages.  Actions by these objects are triggered by selector events
@@ -236,18 +205,10 @@ def main(stdscr):
     
     global globalscr
     global running
-    #stdscr = curses.initscr()
-    #curses.curs_set(0)      # cursor off.
-    #curses.noecho()
-    #curses.cbreak()
-    #stdscr.keypad(True)     # receive special messages.
 
-
+    gb = GameBoard(stdscr, stock_names)
     globalscr = stdscr
     stdscr.border()
-    # subwin(nlines, ncols, begin_y, begin_x)
-    # derwin(
-    #chatscr = stdscr.subwin(2,24,curses.LINES-3,1)
     chatscr = stdscr.derwin(curses.LINES-4,1)
     chatscr.border()
     stdscr.addstr('this is stdscr\n')
@@ -255,8 +216,6 @@ def main(stdscr):
     chatscr.addstr(2, 1, 't2his is chatscr', curses.A_REVERSE)
     chatscr.noutrefresh()
     stdscr.noutrefresh()
-    #chatscr.refresh()
-    #stdscr.refresh()
     curses.doupdate()
     chatscr.getch()
 
