@@ -85,6 +85,8 @@ class GameBoard(object):
         self.coords = dict() # named coordinate locations
 
         self.buttongroups = dict() # key = ButtonGroup name
+        self.buttongroup_first = None # ButtonGroup object ref, not name
+        self.buttongroup_last = None  # ButtonGroup object ref, not name
         self.active_buttongroup = None
 
         # lets try a virtual window or two...
@@ -350,8 +352,15 @@ class GameBoard(object):
         self.add_text(win, ybot, 1, '$') # label for dollar amount under pending
         self._add_field('pending-$', self.win_buysell, ybot, 2, width_pending-1, '>', initval=0)
         self.add_text(win, ybot, midx, str_blocksz, midx, '^')
-        self.add_text(win, ybot+1, midx+1, '[')
-        self.add_text(win, ybot+1, win.width-2, ']')
+        self._add_button_group('blocksz')
+        self._add_button(self.buttongroups['blocksz'], 'blocksz-dec', '[', {'action':'down'}, win, ybot+1, midx+1)
+        self._add_button(self.buttongroups['blocksz'], 'blocksz-inc', ']', {'action':'up'}, win, ybot+1, win.width-2)
+        self.buttongroups['blocksz'].set_nav('blocksz-dec', 'right', 'blocksz-inc')
+        self.buttongroups['blocksz'].set_nav('blocksz-dec', 'next', 'blocksz-inc')
+        self.buttongroups['blocksz'].set_nav('blocksz-inc', 'left', 'blocksz-dec')
+        self.buttongroups['blocksz'].set_nav('blocksz-inc', 'prev', 'blocksz-dec')
+        #self.add_text(win, ybot+1, midx+1, '[')
+        #self.add_text(win, ybot+1, win.width-2, ']')
         self._add_field('blocksz', self.win_buysell, ybot+1, midx+4, 5, '>', initval=500)
         
     def _init_draw_mkt_act(self, dict_border_cells):
@@ -450,7 +459,19 @@ class GameBoard(object):
     def _add_button_group(self, name):
         if name in self.buttongroups:
             raise ValueError(f"ButtonGroup '{name}' already exists")
-        self.buttongroups[name] = ButtonGroup(name)
+        new_buttongroup = ButtonGroup(name)
+        old_last = self.buttongroup_last
+        self.buttongroups[name] = new_buttongroup
+        if self.buttongroup_first is None:
+            self.buttongroup_first = new_buttongroup
+            self.buttongroup_last = new_buttongroup
+        else:
+            old_last.buttongroup_next = new_buttongroup
+            self.buttongroup_first.buttongroup_prev = new_buttongroup
+            new_buttongroup.buttongroup_next = self.buttongroup_first
+            new_buttongroup.buttongroup_prev = old_last
+            self.buttongroup_last = new_buttongroup
+            
 
     def _add_button(self, btn_group, name, label, data, win, y, x):
         '''
@@ -491,6 +512,7 @@ class GameBoard(object):
         self.active_buttongroup = name
         self.buttongroups[name].set_active(True)
         self.update_button_group(name)
+        self.dbg('end of activate_button_group')
 
     def update_button_group(self, name):
         '''
@@ -504,7 +526,7 @@ class GameBoard(object):
         for name, btn in btngrp.buttons.items():
             if btngrp.active_button.name == name and btngrp.is_active:
                 # TODO draw as active, reverse video of its label
-                self.scr.addstr(btn.y, btn.x, '*')
+                self.scr.addstr(btn.y, btn.x, btn.label, curses.A_REVERSE)
             else:
                 self.scr.addstr(btn.y, btn.x, btn.label)
         self.scr.refresh()
@@ -534,8 +556,34 @@ class GameBoard(object):
         # TODO: actually send the dang message
 
     def nav(self, motion):
+        '''
+        GameBoard.nav
+        Called when a direction key is pressed to update whatever the currently
+        active ButtonGroup. If no active ButtonGroup, just ignore.
+        '''
         if self.active_buttongroup:
             self.buttongroups[self.active_buttongroup].nav(motion)
+            self.update_button_group(self.active_buttongroup)
+
+    def buttongroup_nav(self, motion):
+        if motion not in ('prev', 'next'):
+            raise ValueError(f"Invalid motion: [{motion}]")
+        curr_active = self.buttongroups[self.active_buttongroup]
+        if motion == 'prev':
+            next_active = curr_active.buttongroup_prev
+        elif motion == 'next':
+            next_active = curr_active.buttongroup_next
+        self.dbg(f'next_active: {next_active.name}')
+        if curr_active.name == next_active.name:
+            self.dbg(f'no next active found')
+            return # nothing to do, there is no 'next'...
+        self.activate_button_group(next_active.name)
+        #curr_active.set_active(False)
+        #next_active.set_active(False)
+        #self.update_button_group(curr_active.name)
+        #self.update_button_group(next_active.name)
+        #self.active_buttongroup = next_active.name
+
     # --END class GameBoard
 
 class YXCoord(object):
@@ -950,6 +998,8 @@ class ButtonGroup():
         self.active_button = None # object ref, not name
         self.is_active = False
         self.nav_info = dict() # key = Button name
+        self.buttongroup_next = None # object, not name
+        self.buttongroup_prev = None
 
     def add_button(self, btn, name):
         if name in self.buttons:
@@ -993,9 +1043,9 @@ def main(stdscr):
     gb = GameBoard(stdscr, lst_stock_names)    
     gb.debug = True
     #stdscr.border()
+    gb.activate_button_group('buysell')
     while True:
         key = stdscr.getch()
-        gb.activate_button_group('buysell')
         if key in gb.keys_button_nav:
             if gb.active_buttongroup is not None:
                 nav_lookup = {
@@ -1004,10 +1054,17 @@ def main(stdscr):
                     curses.KEY_RIGHT: 'right',
                     curses.KEY_LEFT: 'left'
                 }
+                gb.dbg(f'nav key: {key} -> [{nav_lookup[key]}]')
                 gb.nav(nav_lookup[key])
             else:
                 gb.dbg('no active button group')
             continue
+        #NOTE: cant find a good curses way to read TAB...
+        elif key == 9:
+            gb.dbg('got tab key')
+            gb.buttongroup_nav('next')
+            continue
+        gb.dbg(f'key: {key}')
         gb.update_stock_price(2, 75, False)
         #stdscr.border()
         key = stdscr.getch()
