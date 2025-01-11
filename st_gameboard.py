@@ -578,11 +578,6 @@ class GameBoard(object):
             self.dbg(f'no next active found')
             return # nothing to do, there is no 'next'...
         self.activate_button_group(next_active.name)
-        #curr_active.set_active(False)
-        #next_active.set_active(False)
-        #self.update_button_group(curr_active.name)
-        #self.update_button_group(next_active.name)
-        #self.active_buttongroup = next_active.name
 
     # --END class GameBoard
 
