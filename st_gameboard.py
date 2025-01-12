@@ -1,4 +1,5 @@
 import threading
+import queue
 import curses
 import curses.ascii
 import textwrap
@@ -93,6 +94,8 @@ class GameBoard(object):
 
         #TODO: concern: circular links seem wierd here...
         self.keyboard_thread = KeyboardThread('gameboard-thread', self.scr, self)
+        self.game_op_event = threading.Event()
+        self.game_op_queue = queue.SimpleQueue()
 
         # lets try a virtual window or two...
         #self.win_market = (1, 1, 11, 34) # uly, ulx, h, w
