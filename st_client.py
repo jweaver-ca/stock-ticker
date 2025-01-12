@@ -149,6 +149,18 @@ def main(stdscr):
     # IDEA: do we just give up and put select() on a timeout?? what is wrong with that?
     #       > is it just the using of resources??
 
+    # IDEA: Use threading.Event in GameBoard to send events to the client game instead of sending the
+    #     GameBoard an object with an API for the client.  This would mean the client thread is in charge
+    #     executing requests made by user through the GameBoard, instead of GameBoard/Keyboard thread 
+    #     executing game operations through the client API.  Advantage is the client data structures
+    #     don't need to be synchronized anymore. Instead the queue of of user input requests would need
+    #     to be synchronized.
+    # THOUGHT: there are situations where input could be made on the GameBoard that isn't valid based
+    #     on the current game state e.g. Issue a buy order, but the client has sent the buy order to server
+    #     for processing and we are awaiting the results (which would mean there is a market activity 
+    #     imminent and so we won't know what the stock prices are).  The GameBoard should try to limit
+    #     this through UI, but it can't be perfect.  SO WHICH WAY ADDRESSES THIS ISSUE BEST?
+
     # NOTE: main thread runs the selector loop
     # NOTE: KeyboardThread runs the curses input loop
 
