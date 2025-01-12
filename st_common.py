@@ -23,6 +23,8 @@ class MessageReceiver:
         self.msg = b''               # bytes of message being received
         self.message = None          # completed message object once all received
 
+        self.kt = None # TODO remove this altogether, just here to avoid exception
+
     # called when bytes received over connection conn.  When a message is completed, process it
     # message starts with 4 byte int indicating size, then that # of bytes for
     # message body

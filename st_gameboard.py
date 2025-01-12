@@ -1,6 +1,6 @@
 import threading
 import curses
-import curses.panel
+import curses.ascii
 import textwrap
 import traceback # I need to print debug logs if exception raised, but also see exception details
 
@@ -75,12 +75,13 @@ class GameBoard(object):
         curses.KEY_RIGHT
     )
 
-    def __init__(self, stdscr, lst_stock_names):
+    def __init__(self, stdscr, lst_stock_names, st_client):
         self.scr = stdscr
         self.max_stock_price = 999 # no more than 3 digits!
         self.min_stock_price = 0
         self.scr.addstr("Hello dude")
         self.stock_names = lst_stock_names
+        self.st_client = st_client
 
         self.fields = dict() # Field objects
         self.coords = dict() # named coordinate locations
@@ -91,7 +92,7 @@ class GameBoard(object):
         self.active_buttongroup = None
 
         #TODO: concern: circular links seem wierd here...
-        self.keyboard_thread = KeyboardThread(self)
+        self.keyboard_thread = KeyboardThread('gameboard-thread', self.scr, self)
 
         # lets try a virtual window or two...
         #self.win_market = (1, 1, 11, 34) # uly, ulx, h, w
@@ -156,6 +157,9 @@ class GameBoard(object):
         # last thing after all windows have drawn their lines, borders, etc
         self.draw_border(dict_border_cells)
         self.debug = False # show debugging msgs in the system message window if True
+
+        self.keyboard_thread.start()
+        self.dbg("End of init")
 
     def dbg(self, msg):
         '''
@@ -555,7 +559,6 @@ class GameBoard(object):
         # NOTE: getstr really has to go in a curses window proper, else the entry
         #   ruins stuff to the right that's in the same window
         chat_msg = GameBoard.read_str(self.cwin_chatmsg_in).decode('utf-8')
-        self.dbg(f"chat_sent: {chat_msg}")
         return chat_msg
         # TODO: actually send the dang message
 
@@ -572,16 +575,35 @@ class GameBoard(object):
     def buttongroup_nav(self, motion):
         if motion not in ('prev', 'next'):
             raise ValueError(f"Invalid motion: [{motion}]")
-        curr_active = self.buttongroups[self.active_buttongroup]
-        if motion == 'prev':
-            next_active = curr_active.buttongroup_prev
-        elif motion == 'next':
-            next_active = curr_active.buttongroup_next
-        self.dbg(f'next_active: {next_active.name}')
-        if curr_active.name == next_active.name:
-            self.dbg(f'no next active found')
-            return # nothing to do, there is no 'next'...
-        self.activate_button_group(next_active.name)
+        if self.active_buttongroup:
+            curr_active = self.buttongroups[self.active_buttongroup]
+            if motion == 'prev':
+                next_active = curr_active.buttongroup_prev
+            elif motion == 'next':
+                next_active = curr_active.buttongroup_next
+            self.dbg(f'next_active: {next_active.name}')
+            if curr_active.name == next_active.name:
+                self.dbg(f'no next active found')
+                return # nothing to do, there is no 'next'...
+            self.activate_button_group(next_active.name)
+        else:
+            self.activate_button_group(self.buttongroup_first.name)
+
+    def redraw(self):
+        self.scr.redrawwin()
+
+    def has_exited(self):
+        '''
+        This will return true if player has requested to quit the 
+        program (e.g. by pressing [Q]uit button). Otherwise False
+        Client program should check this in its main loop
+        TODO: I think some kind of Client object will be created
+        and added to the gameboard eventually which will grant it an
+        API for client-related functions e.g. buy-shares, send-message,
+        etc.   Exit might be part of that functionality in which case
+        this method could be removed
+        '''
+        return self.keyboard_thread.has_exited
 
     # --END class GameBoard
 
@@ -1046,13 +1068,15 @@ class KeyboardThread(threading.Thread):
         self.msg = ""
         self.daemon = True
         self.running = False
-        self.shutdown = False        # flag to indicate that main program is done
         self.gameboard = gameboard
+        self.has_exited = False
 
     def run(self):
         self.running = True
         while self.running:
             key = self.scr.getch() # blocking (since curses.nodelay() not called)
+            ckey = chr(key)
+            self.gameboard.add_system_msg(f'KEYPRESS: {key}')
             if key in self.gameboard.keys_button_nav:
                 if self.gameboard.active_buttongroup is not None:
                     nav_lookup = {
@@ -1066,14 +1090,19 @@ class KeyboardThread(threading.Thread):
                 else:
                     self.gameboard.dbg('no active button group')
             #NOTE: cant find a good curses way to read TAB...
-            elif key == 9:
-                self.gameboard.dbg('got tab key')
+            elif key == curses.ascii.TAB:
                 self.gameboard.buttongroup_nav('next')
-            elif key == ord('Q'):
+            elif key == curses.KEY_STAB:
+                self.gameboard.buttongroup_nav('prev')
+            elif ckey in ('q', 'Q'):
                 self.running = False
-                disconnect()
+                self.has_exited = True
+            elif ckey in ('m', 'M'):
+                # TODO: how do we send the damn message????
+                msg = self.gameboard.input_chat_message()
+                self.gameboard.st_client.send_chat_message(msg)
+        # end of while loop, to get here means program is exiting
                 
-        print ('kt after run loop: ' + str(datetime.datetime.now()))
     def stop(self):
         self.running = False
 

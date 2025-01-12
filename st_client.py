@@ -11,7 +11,6 @@ import socket
 import selectors
 import json
 import struct
-import signal # trying to get KeyboardThread to interrupt main thread
 import datetime
 import types # SimpleNamespace for stock enum-ish construct?
 from st_gameboard import GameBoard
@@ -43,9 +42,19 @@ gameserver = args.server
 stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
 stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
 
+class StockTickerClient():
+    '''
+    This we passed to the GameBoard so that it can make calls here e.g.
+    send a chat message, request stock purchase etc.
+    '''
+    def __init__(self, socket):
+        self.socket = socket
 
+    def send_chat_message(self, str_message):
+        self.socket.send(bmsg('msg', str_message))
 
 # simple message object/dictionary
+# TODO: rename msg because it shares name with message type 'msg' / confusing
 def msg(strType, strData):
     return {'TYPE': strType, 'DATA': strData}
 
@@ -59,24 +68,23 @@ def bmsg(strType, strData):
 # called by client once completed message received from server
 def process_message(msgobj):
     global running
-    global globalscr
+    global gameboard
     #msgobj = oClient.message
     if msgobj['TYPE'] == 'chatmsg':
-        globalscr.addstr(msgobj['DATA'] + '\n')
+        #globalscr.addstr(msgobj['DATA'] + '\n')
+        gameboard.add_system_msg(msgobj['DATA'])
     elif msgobj['TYPE'] == 'error':
-        globalscr.addstr(f'ERROR FROM SERVER: {msgobj["DATA"]}\n')
+        gameboard.add_system_msg(f'ERROR FROM SERVER: {msgobj["DATA"]}\n')
         running = False
     elif msgobj['TYPE'] == 'conn-accept':
-        globalscr.addstr("** connection to server accepted **\n")
+        gameboard.add_system_msg("** connection to server accepted **\n")
     elif msgobj['TYPE'] == 'disconnect':
-        globalscr.addstr(f'[{msgobj["DATA"]} has disconnected]\n')
+        gameboard.add_system_msg(f'[{msgobj["DATA"]} has disconnected]\n')
     elif msgobj['TYPE'] == 'joined':
-        globalscr.addstr(f'[{msgobj["DATA"]} has joined]\n')
+        gameboard.add_system_msg(f'[{msgobj["DATA"]} has joined]\n')
     elif msgobj['TYPE'] == 'server-exit':
-        globalscr.addstr(f'[SERVER SHUTDOWN! Exiting...]\n')
+        gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]\n')
         running = False
-    globalscr.refresh()
-
 
 # --------------------------------------------------------
 # Attempt connecton to game server
@@ -97,8 +105,9 @@ sel = selectors.DefaultSelector()
 #sel.register(clientsocket, selectors.EVENT_READ | selectors.EVENT_WRITE, None)
 sel.register(clientsocket, selectors.EVENT_READ, None)
 
+# globals TODO: is there a better way?
 running = True
-globalscr = None
+gameboard = None
 
 # process keyboard instruction to quit.
 # TODO: clientsocket is global. probably not great
@@ -122,36 +131,36 @@ def disconnect():
 #try:
 def main(stdscr):
     
-    global globalscr
+    global gameboard
     global running
 
-    gb = GameBoard(stdscr, stock_names)
-    globalscr = stdscr
+    oClient = StockTickerClient(clientsocket)
+    gameboard = GameBoard(stdscr, stock_names, oClient)
+    gameboard.debug = True
+    gameboard.redraw()
 
-#   stdscr.border()
-#   chatscr = stdscr.derwin(curses.LINES-4,1)
-#   chatscr.border()
-#   stdscr.addstr('this is stdscr\n')
-#   chatscr.addstr(1, 1, 'this is chatscr', curses.A_REVERSE)
-#   chatscr.addstr(2, 1, 't2his is chatscr', curses.A_REVERSE)
-#   chatscr.noutrefresh()
-#   stdscr.noutrefresh()
-#   curses.doupdate()
-#   chatscr.getch()
+    # TODO: At this point, GameBoard's thread has started (on __init__) but this main thread has no way to react
+    #     to keypresses in the GameBoard because this thread gets tied up below with select() calls
+    #     Is the solution to put the selector in its own thread and somehow have another
+    #     loop running as the main thread?  what would that look like?
+    # IDEA: since this main thread is tied up if and only if (right?) the connection to the server
+    #     is intact, we could send the server a message that we want to quit, and the server could
+    #     send us a message which would end the block.  STUPID, RIGHT?
+    # IDEA: do we just give up and put select() on a timeout?? what is wrong with that?
+    #       > is it just the using of resources??
 
     # NOTE: main thread runs the selector loop
     # NOTE: KeyboardThread runs the curses input loop
 
-    kt = KeyboardThread(args.name, stdscr, clientsocket)
-    kt.start()
+    #kt = KeyboardThread(args.name, stdscr, clientsocket)
+    #kt.start()
     # TODO: this is bad OOP... adding kt to msgrec...
-    msgrec.kt = kt
+    # msgrec.kt = kt
     while running:
         # select() seems to be interruptable by KeyboardInterrupt
         try:
-            #events = sel.select(timeout=1.0)
-            events = sel.select()
-            print (f"select() done. {events}")
+            events = sel.select(timeout=1.0)
+            #events = sel.select()
             for key, mask in events:
                 conn = key.fileobj
                 if mask & selectors.EVENT_READ:
@@ -165,11 +174,11 @@ def main(stdscr):
                         running = False
         except Exception as e:
             print ('main Exception start: ' + str(datetime.datetime.now()))
-            stdscr.addstr (f"interrupt: {e}\n")
+            gameboard.dbg(f"interrupt: {e}\n")
             print(f"interrupt: {e}")
-            stdscr.refresh()
             running = False
-    kt.stop()
+        if gameboard.has_exited():
+            running = False
     print ('end main: ' + str(datetime.datetime.now()))
 #clientsocket.close() # TODO: is it harmless to close again? check what purpose does it serve?
 #finally:
@@ -179,5 +188,6 @@ def main(stdscr):
 #   curses.echo()
 #   curses.endwin()
 
-curses.wrapper(main)
-print ('final exit')
+if __name__ == '__main__':
+    curses.wrapper(main)
+    print ('final exit')
