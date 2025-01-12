@@ -30,6 +30,7 @@ class MessageReceiver:
         print (f'add_bytes: {b}')
         while b: # always substract from byte array as its processed
             if self.kt:
+                # NOTE/TODO: kt is just for debugging?  there's got to be a better solution!
                 self.kt.scr.addstr(f'{b}\n')
                 self.kt.scr.refresh()
             if self.remaining_sz_bytes > 0:

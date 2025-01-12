@@ -1,3 +1,4 @@
+import threading
 import curses
 import curses.panel
 import textwrap
@@ -88,6 +89,9 @@ class GameBoard(object):
         self.buttongroup_first = None # ButtonGroup object ref, not name
         self.buttongroup_last = None  # ButtonGroup object ref, not name
         self.active_buttongroup = None
+
+        #TODO: concern: circular links seem wierd here...
+        self.keyboard_thread = KeyboardThread(self)
 
         # lets try a virtual window or two...
         #self.win_market = (1, 1, 11, 34) # uly, ulx, h, w
@@ -1031,6 +1035,47 @@ class ButtonGroup():
         new_active_btn_name = self.nav_info[self.active_button.name][direction]
         if new_active_btn_name:
             self.active_button = self.buttons[new_active_btn_name]
+
+# NOTE: I think the mechanics of KeyboardThread should be merged into
+#  GameBoard. I think that makes sense since GameBoard has the hotkeys
+# etc.
+class KeyboardThread(threading.Thread):
+    def __init__(self, name, scr, gameboard):
+        super().__init__(name=name)
+        self.scr = scr
+        self.msg = ""
+        self.daemon = True
+        self.running = False
+        self.shutdown = False        # flag to indicate that main program is done
+        self.gameboard = gameboard
+
+    def run(self):
+        self.running = True
+        while self.running:
+            key = self.scr.getch() # blocking (since curses.nodelay() not called)
+            if key in self.gameboard.keys_button_nav:
+                if self.gameboard.active_buttongroup is not None:
+                    nav_lookup = {
+                        curses.KEY_UP: 'up',
+                        curses.KEY_DOWN: 'down',
+                        curses.KEY_RIGHT: 'right',
+                        curses.KEY_LEFT: 'left'
+                    }
+                    self.gameboard.dbg(f'nav key: {key} -> [{nav_lookup[key]}]')
+                    self.gameboard.nav(nav_lookup[key])
+                else:
+                    self.gameboard.dbg('no active button group')
+            #NOTE: cant find a good curses way to read TAB...
+            elif key == 9:
+                self.gameboard.dbg('got tab key')
+                self.gameboard.buttongroup_nav('next')
+            elif key == ord('Q'):
+                self.running = False
+                disconnect()
+                
+        print ('kt after run loop: ' + str(datetime.datetime.now()))
+    def stop(self):
+        self.running = False
 
 def main(stdscr):
     curses.curs_set(0)

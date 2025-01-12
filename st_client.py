@@ -8,7 +8,6 @@
 
 import argparse
 import socket
-import threading
 import selectors
 import json
 import struct
@@ -79,39 +78,6 @@ def process_message(msgobj):
     globalscr.refresh()
 
 
-class KeyboardThread(threading.Thread):
-    def __init__(self, name, scr, conn):
-        super().__init__(name=name)
-        self.scr = scr
-        self.conn = conn
-        self.msg = ""
-        self.daemon = True
-        self.running = False
-        self.shutdown = False        # flag to indicate that main program is done
-
-    def run(self):
-        global curses
-        self.running = True
-        while self.running:
-            val = self.scr.getch() # blocking (since curses.nodelay() not called)
-            if val in [curses.KEY_ENTER, 10, 13]:
-                if self.msg:
-                    self.conn.send(bmsg('msg', self.msg))
-                    self.scr.addstr(f'\nSending: {self.msg}\n')
-                    self.msg = ""
-                    self.scr.refresh()
-            elif val in [curses.KEY_BREAK, curses.KEY_DOWN]:
-                self.running = False
-                disconnect()
-                #signal.raise_signal(signal.SIGINT)
-            else:
-                self.msg += chr(val)
-                self.scr.addstr(chr(val))
-                self.scr.refresh()
-        print ('kt after run loop: ' + str(datetime.datetime.now()))
-    def stop(self):
-        self.running = False
-
 # --------------------------------------------------------
 # Attempt connecton to game server
 # --------------------------------------------------------
@@ -122,8 +88,8 @@ except:
     print (f"Connection to [{gameserver}] failed")
     exit (1)
 # MessageReceiver is duplicate of that found in chat_server_v3.py, so just give name 'server'
-# oServer is attached to selector and will simply process messages from the server
-oServer = MessageReceiver('server', clientsocket, process_message)
+# msgrec is attached to selector and will simply process messages from the server
+msgrec = MessageReceiver('server', clientsocket, process_message)
 #clientsocket.send(bytes(args.name, 'UTF-8'))
 clientsocket.send(bmsg('initconn',args.name))
 
@@ -142,9 +108,9 @@ globalscr = None
 # NOTE: the close() call on the socket should *ONLY* be done when a 0-byte read message has been
 #    received from the server... right??  What about if the *server* initiates the shut-down?
 def disconnect():
-    oServer.conn.send(bmsg('exit', None))
-    oServer.conn.shutdown(socket.SHUT_WR)
-    #oServer.conn.close()
+    msgrec.conn.send(bmsg('exit', None))
+    msgrec.conn.shutdown(socket.SHUT_WR)
+    #msgrec.conn.close()
 
 # NOTE: while main is executing wrapped in curses.wrapper I can't seem to get access to
 #   exceptions thrown within main.  curses handles them all, which means I can't use
@@ -161,21 +127,25 @@ def main(stdscr):
 
     gb = GameBoard(stdscr, stock_names)
     globalscr = stdscr
-    stdscr.border()
-    chatscr = stdscr.derwin(curses.LINES-4,1)
-    chatscr.border()
-    stdscr.addstr('this is stdscr\n')
-    chatscr.addstr(1, 1, 'this is chatscr', curses.A_REVERSE)
-    chatscr.addstr(2, 1, 't2his is chatscr', curses.A_REVERSE)
-    chatscr.noutrefresh()
-    stdscr.noutrefresh()
-    curses.doupdate()
-    chatscr.getch()
+
+#   stdscr.border()
+#   chatscr = stdscr.derwin(curses.LINES-4,1)
+#   chatscr.border()
+#   stdscr.addstr('this is stdscr\n')
+#   chatscr.addstr(1, 1, 'this is chatscr', curses.A_REVERSE)
+#   chatscr.addstr(2, 1, 't2his is chatscr', curses.A_REVERSE)
+#   chatscr.noutrefresh()
+#   stdscr.noutrefresh()
+#   curses.doupdate()
+#   chatscr.getch()
+
+    # NOTE: main thread runs the selector loop
+    # NOTE: KeyboardThread runs the curses input loop
 
     kt = KeyboardThread(args.name, stdscr, clientsocket)
     kt.start()
-    # TODO: this is bad OOP... adding kt to oServer...
-    oServer.kt = kt
+    # TODO: this is bad OOP... adding kt to msgrec...
+    msgrec.kt = kt
     while running:
         # select() seems to be interruptable by KeyboardInterrupt
         try:
@@ -187,11 +157,11 @@ def main(stdscr):
                 if mask & selectors.EVENT_READ:
                     b = conn.recv(1024)
                     if b:
-                        oServer.add_bytes(b)
+                        msgrec.add_bytes(b)
                     else:
                         # disconnect?
                         print ('Server disconnected')
-                        oServer.conn.close()
+                        msgrec.conn.close()
                         running = False
         except Exception as e:
             print ('main Exception start: ' + str(datetime.datetime.now()))
