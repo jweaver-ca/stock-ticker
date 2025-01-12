@@ -16,6 +16,7 @@ import signal # trying to get KeyboardThread to interrupt main thread
 import datetime
 import types # SimpleNamespace for stock enum-ish construct?
 from st_gameboard import GameBoard
+from st_common import MessageReceiver
 
 try:
     import curses
@@ -56,54 +57,27 @@ def bmsg(strType, strData):
     sz = len(msgbytes)
     return struct.pack('I', sz) + msgbytes
 
+# called by client once completed message received from server
+def process_message(msgobj):
+    global running
+    global globalscr
+    #msgobj = oClient.message
+    if msgobj['TYPE'] == 'chatmsg':
+        globalscr.addstr(msgobj['DATA'] + '\n')
+    elif msgobj['TYPE'] == 'error':
+        globalscr.addstr(f'ERROR FROM SERVER: {msgobj["DATA"]}\n')
+        running = False
+    elif msgobj['TYPE'] == 'conn-accept':
+        globalscr.addstr("** connection to server accepted **\n")
+    elif msgobj['TYPE'] == 'disconnect':
+        globalscr.addstr(f'[{msgobj["DATA"]} has disconnected]\n')
+    elif msgobj['TYPE'] == 'joined':
+        globalscr.addstr(f'[{msgobj["DATA"]} has joined]\n')
+    elif msgobj['TYPE'] == 'server-exit':
+        globalscr.addstr(f'[SERVER SHUTDOWN! Exiting...]\n')
+        running = False
+    globalscr.refresh()
 
-# ChatClient objects just receive bytes over a network connection and form them into
-# messages.  Actions by these objects are triggered by selector events
-class ChatClient:
-    def __init__(self, name, conn):
-        self.conn = conn
-        self.name = name
-
-        self.remaining_sz_bytes = 4
-        self.sz_bytes = b''
-        self.sz = 0                  # size of message in bytes
-        self.msg = b''               # bytes of message being received
-        self.message = None          # completed message object once all received
-
-    # called when client sends data.  When a message is completed, process it
-    # message starts with 4 byte int indicating size, then that # of bytes for
-    # message body
-    def add_bytes(self, b):
-        print (f'add_bytes: {b}')
-        while b: # always substract from byte array as its processed
-            if self.kt:
-                self.kt.scr.addstr(f'{b}\n')
-                self.kt.scr.refresh()
-            if self.remaining_sz_bytes > 0:
-                self.sz_bytes += b[0:self.remaining_sz_bytes]
-                b = b[self.remaining_sz_bytes:]
-                self.remaining_sz_bytes = 4 - len(self.sz_bytes)
-                if len(self.sz_bytes) == 4:
-                    self.sz = struct.unpack('I', self.sz_bytes)[0]
-            if b:
-                if len(b) + len(self.msg) < self.sz:
-                    # not enough data in b to complete message
-                    self.msg += b
-                    b = b'' # stop loop
-                else:
-                    # exactly enough or extra
-                    required_bytes = self.sz - len(self.msg)
-                    self.msg += b[0:required_bytes]
-                    # TODO: process message
-                    print(f'self.msg: {self.msg}')
-                    self.message = json.loads(self.msg.decode('utf-8'))
-                    process_message(self)
-                    b = b[required_bytes:]
-                    self.sz_bytes = b''
-                    self.remaining_sz_bytes = 4
-                    self.msg = b''
-                    self.sz = 0
-                    self.message = None
 
 class KeyboardThread(threading.Thread):
     def __init__(self, name, scr, conn):
@@ -143,13 +117,13 @@ class KeyboardThread(threading.Thread):
 # --------------------------------------------------------
 try:
     clientsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    clientsocket.connect((gameserver, 8089))
+    clientsocket.connect((gameserver, args.port))
 except:
     print (f"Connection to [{gameserver}] failed")
     exit (1)
-# ChatClient is duplicate of that found in chat_server_v3.py, so just give name 'server'
+# MessageReceiver is duplicate of that found in chat_server_v3.py, so just give name 'server'
 # oServer is attached to selector and will simply process messages from the server
-oServer = ChatClient('server', clientsocket)
+oServer = MessageReceiver('server', clientsocket, process_message)
 #clientsocket.send(bytes(args.name, 'UTF-8'))
 clientsocket.send(bmsg('initconn',args.name))
 
@@ -171,27 +145,6 @@ def disconnect():
     oServer.conn.send(bmsg('exit', None))
     oServer.conn.shutdown(socket.SHUT_WR)
     #oServer.conn.close()
-
-# called by client once completed message received from server
-def process_message(oClient):
-    global running
-    global globalscr
-    msgobj = oClient.message
-    if msgobj['TYPE'] == 'chatmsg':
-        globalscr.addstr(msgobj['DATA'] + '\n')
-    elif msgobj['TYPE'] == 'error':
-        globalscr.addstr(f'ERROR FROM SERVER: {msgobj["DATA"]}\n')
-        running = False
-    elif msgobj['TYPE'] == 'conn-accept':
-        globalscr.addstr("** connection to server accepted **\n")
-    elif msgobj['TYPE'] == 'disconnect':
-        globalscr.addstr(f'[{msgobj["DATA"]} has disconnected]\n')
-    elif msgobj['TYPE'] == 'joined':
-        globalscr.addstr(f'[{msgobj["DATA"]} has joined]\n')
-    elif msgobj['TYPE'] == 'server-exit':
-        globalscr.addstr(f'[SERVER SHUTDOWN! Exiting...]\n')
-        running = False
-    globalscr.refresh()
 
 # NOTE: while main is executing wrapped in curses.wrapper I can't seem to get access to
 #   exceptions thrown within main.  curses handles them all, which means I can't use
