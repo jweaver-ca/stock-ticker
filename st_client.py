@@ -57,6 +57,7 @@ class Player:
         self.portfolio = [ 0 for i in range(len(stock_names)) ]
         self.cash = 0
         self.initialized = False # server needs to send info before use
+        self.ready_start = False
 
 # simple message object/dictionary
 # TODO: rename msg because it shares name with message type 'msg' / confusing
@@ -98,6 +99,11 @@ def process_message(msgobj):
         update_game_status(msgobj['DATA'])
     elif msgobj['TYPE'] == 'initplayer':
         update_player(msgobj['DATA'])
+    elif msgobj['TYPE'] == 'start':
+        gameboard.add_system_msg('All players ready. Game has started!')
+    elif msgobj['TYPE'] == 'servermsg':
+        gameboard.add_system_msg(str(msgobj['DATA']))
+        # TODO set any flags here to allow gameplay
     else:
         raise ValueError(f"unknown message type received: [{msgobj['TYPE']}]")
 
@@ -131,6 +137,12 @@ def process_gameboard_ops(gameboard):
             send_chat_message(op['DATA'])
         elif op['TYPE'] == 'quit':
             process_quit()
+        elif op['TYPE'] == 'ready-start':
+            if not player.ready_start:
+                clientsocket.send(bmsg('start', op['DATA']))
+                player.ready_start = True
+            else:
+                gameboard.dbg('game start requested again')
         else:
             gameboard.add_system_msg('ERROR: bad game operation type: {op["TYPE"]}')
 

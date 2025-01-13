@@ -131,7 +131,7 @@ class GameBoard(object):
         # bottom of screen
         # hotkey
         self.win_hotkey = Window(self.win_main.BY(), self.win_main.LX(), 1, self.win_main.width) 
-        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]equest Pause  [Q]uit')
+        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]equest Pause  [Q]uit  [S]tart Game')
 
         # chatmsg - entry window for typing chat message to other players
         self.win_chatmsg = Window(self.win_hotkey.TY()-2, self.win_main.LX(), 1, self.win_main.width) 
@@ -1109,7 +1109,7 @@ class KeyboardThread(threading.Thread):
                     self.running = False
                 continue
             ckey = chr(key)
-            self.gameboard.add_system_msg(f'KEYPRESS: {key}')
+            #self.gameboard.add_system_msg(f'KEYPRESS: {key}')
             if key in self.gameboard.keys_button_nav:
                 if self.gameboard.active_buttongroup is not None:
                     nav_lookup = {
@@ -1141,6 +1141,9 @@ class KeyboardThread(threading.Thread):
                 self.gameboard.redraw()
                 self.gameboard.scr.refresh()
                 curses.doupdate()
+            elif ckey in ('s', 'S'):
+                # request to start game (basically "I'm ready" message to server)
+                self.gameboard.game_op_queue.put(game_operation('ready-start', None))
                 # TODO: add an operation to the game_op_queue
         # end of while loop, to get here means program is exiting
                 

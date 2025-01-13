@@ -23,9 +23,10 @@ C       exit        Alert client exit               n/a
  S      server-exit Server exiting
  S      joined      A client has joined             Client name
  S      playerlist  List of players in game         tuple of strings
+ S      servermsg   Generic message from server     string
 --- GAME RELATED ---
 CS      start       Start game/alert game started   n/a
-C       buysell     Buy/Sell stock                  {reqid: ???, stock: #, price: #, shares: #} 
+CS      buysell     Buy/Sell stock                  {reqid: ???, shares: [ 500, -1500, 0 ...]} server {reqid: ???}  
 C       pause       Pause market briefly            n/a
  S      initmkt     Markets initial status          (all stock prices), simple list of 6 2-tuple (price, bln_div) [(100, False), (105, True)...etc
  S      initplayer  Player's initial status         TODO
