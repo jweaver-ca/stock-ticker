@@ -111,9 +111,7 @@ class StockMarket:
     DIV_VAL = 105       # minimum stock price to pay dividends
 
     def __init__(self):
-        self.market = {}
-        for s in stock:
-            self.market[s] = INIT_VAL
+        self.market = [ StockMarket.INIT_VAL for i in range(len(stock_names)) ]
 
     def up(self, iStock, val):
         retval = {'split': False}
@@ -174,15 +172,20 @@ sel.register(serversocket, selectors.EVENT_READ, "listen-new")
 client_conns = dict()   # key: socket, value: ChatClient object
 # TODO: players should replace client_conns, since connection is part of the Player class?
 players = dict()  # key = player name
+market = StockMarket()
 
 # simple message object/dictionary
-def msg(strType, strData):
-    return {'TYPE': strType, 'DATA': strData}
+def msg(str_type, data):
+    '''
+    data: can be a string, number, list, tuple, dictionary, boolean, None
+        see json.dumps() conversion table
+    '''
+    return {'TYPE': str_type, 'DATA': data}
 
 # shortcut to get bytes (utf-8) of json-encoded message, including 4 byte size
 # result from this function can go right into socket.send(...)
-def bmsg(strType, strData):
-    msgbytes = json.dumps(msg(strType, strData)).encode('utf-8')
+def bmsg(str_type, data):
+    msgbytes = json.dumps(msg(str_type, data)).encode('utf-8')
     sz = len(msgbytes)
     return struct.pack('I', sz) + msgbytes
 

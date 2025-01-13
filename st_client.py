@@ -8,6 +8,7 @@
 
 import argparse
 import socket
+import threading
 import selectors
 import json
 import struct
@@ -132,8 +133,24 @@ gameboard = None
 #   it might just return an empty list
 
 def process_gameboard_ops(gameboard):
-    while True:
-        op = gameboard.get_operation() # blocking
+    while running:
+        op = gameboard.get_operation(block=True, timeout=2) # blocking
+        if op is None:
+            continue # timeout reached
+        if op['TYPE'] == 'chat-message':
+            send_chat_message(op['DATA'])
+        elif op['TYPE'] == 'quit':
+            process_quit()
+        else:
+            gameboard.add_system_msg('ERROR: bad game operation type: {op["TYPE"]}')
+
+def send_chat_message(str_message):
+    clientsocket.send(bmsg('msg', str_message))
+
+def process_quit():
+    clientsocket.send(bmsg('exit', None))
+    running = False
+
 
 #try:
 def main(stdscr):
@@ -144,7 +161,11 @@ def main(stdscr):
 
     gameboard = GameBoard(stdscr, stock_names)
     gameboard.debug = True
-    gameboard.redraw()
+    gameboard.redraw() # TODO: I think this is unnecessary, remove and make sure no screen drawing errors creep in
+
+    gameboard_thread = threading.Thread(target=process_gameboard_ops, args=(gameboard,))
+    gameboard_thread.start()
+
 
     # TODO: At this point, GameBoard's thread has started (on __init__) but this main thread has no way to react
     #     to keypresses in the GameBoard because this thread gets tied up below with select() calls
@@ -191,13 +212,10 @@ def main(stdscr):
                         print ('Server disconnected')
                         msgrec.conn.close()
                         running = False
-        except Exception as e:
+        except:
+            gameboard.program_exited = True
+            running = False
             print ('main Exception start: ' + str(datetime.datetime.now()))
-            gameboard.dbg(f"interrupt: {e}\n")
-            print(f"interrupt: {e}")
-            running = False
-        if gameboard.has_exited():
-            running = False
     print ('end main: ' + str(datetime.datetime.now()))
 #clientsocket.close() # TODO: is it harmless to close again? check what purpose does it serve?
 #finally:

@@ -66,7 +66,7 @@ class MessageReceiver:
                     #process_message(self)
                     if self.processor is not None:
                         if self.data:
-                            self.processor(self.message, data)
+                            self.processor(self.message, self.data)
                         else:
                             self.processor(self.message)
                     else:
