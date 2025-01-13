@@ -7,7 +7,9 @@
 # - handle client disconnect by server
 
 import argparse
+import traceback
 import socket
+import threading
 import selectors
 import json
 import struct
@@ -37,21 +39,24 @@ parser.add_argument("--port", "-p", type=int, default=default_args['port'], help
 args = parser.parse_args() 
 gameserver = args.server
 
+# game rules TODO: these should come from the server
+# in any case, these value MUST match the server...
+DIV_MIN = 105 # minimum stock value to pay dividends
+SPLIT_VAL = 200 # when a stock reachese this value it splits
+BUST_VAL = 0    # stock goes "off the market" if at or below this value
+INIT_VAL = 100  # price each stock starts at
+
 # Could use Enum.. no real need I think...
 # TODO: decide if simplenamespace or just a plain old array of string for stocks...
 stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
 stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
 
-class StockTickerClient():
-    '''
-    This we passed to the GameBoard so that it can make calls here e.g.
-    send a chat message, request stock purchase etc.
-    '''
-    def __init__(self, socket):
-        self.socket = socket
-
-    def send_chat_message(self, str_message):
-        self.socket.send(bmsg('msg', str_message))
+class Player:
+    def __init__(self, name):
+        self.name = name
+        self.portfolio = [ 0 for i in range(len(stock_names)) ]
+        self.cash = 0
+        self.initialized = False # server needs to send info before use
 
 # simple message object/dictionary
 # TODO: rename msg because it shares name with message type 'msg' / confusing
@@ -85,41 +90,30 @@ def process_message(msgobj):
     elif msgobj['TYPE'] == 'server-exit':
         gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]\n')
         running = False
-
-# --------------------------------------------------------
-# Attempt connecton to game server
-# --------------------------------------------------------
-try:
-    clientsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    clientsocket.connect((gameserver, args.port))
-except:
-    print (f"Connection to [{gameserver}] failed")
-    exit (1)
-# MessageReceiver is duplicate of that found in chat_server_v3.py, so just give name 'server'
-# msgrec is attached to selector and will simply process messages from the server
-msgrec = MessageReceiver('server', clientsocket, process_message)
-#clientsocket.send(bytes(args.name, 'UTF-8'))
-clientsocket.send(bmsg('initconn',args.name))
-
-sel = selectors.DefaultSelector()
-#sel.register(clientsocket, selectors.EVENT_READ | selectors.EVENT_WRITE, None)
-sel.register(clientsocket, selectors.EVENT_READ, None)
+    elif msgobj['TYPE'] == 'initmkt':
+        update_market(msgobj['DATA'])
+    elif msgobj['TYPE'] == 'playerlist':
+        update_players(msgobj['DATA'])
+    elif msgobj['TYPE'] == 'gamestat':
+        update_game_status(msgobj['DATA'])
+    elif msgobj['TYPE'] == 'initplayer':
+        update_player(msgobj['DATA'])
+    else:
+        raise ValueError(f"unknown message type received: [{msgobj['TYPE']}]")
 
 # globals TODO: is there a better way?
 running = True
+player = None # NOTE/TODO: not sure how necessary it is to keep client copies of player/market
+market = None # [ (stockval, bln_dividend), (stockval, bln_dividend), etc ]
 gameboard = None
+clientsocket = None
 
-# process keyboard instruction to quit.
 # TODO: clientsocket is global. probably not great
 # NOTE: since select() is hard/impossible to interrupt without timeout, maybe the solution
 #   is to send/recieve a final message
 # Send a note to server that we are disconnecting.
 # NOTE: the close() call on the socket should *ONLY* be done when a 0-byte read message has been
 #    received from the server... right??  What about if the *server* initiates the shut-down?
-def disconnect():
-    msgrec.conn.send(bmsg('exit', None))
-    msgrec.conn.shutdown(socket.SHUT_WR)
-    #msgrec.conn.close()
 
 # NOTE: while main is executing wrapped in curses.wrapper I can't seem to get access to
 #   exceptions thrown within main.  curses handles them all, which means I can't use
@@ -128,16 +122,90 @@ def disconnect():
 # NOTE: selectors says if a signal is received in the thread  where .select() is block
 #   it might just return an empty list
 
+def process_gameboard_ops(gameboard):
+    while running:
+        op = gameboard.get_operation(block=True, timeout=2) # blocking
+        if op is None:
+            continue # timeout reached
+        if op['TYPE'] == 'chat-message':
+            send_chat_message(op['DATA'])
+        elif op['TYPE'] == 'quit':
+            process_quit()
+        else:
+            gameboard.add_system_msg('ERROR: bad game operation type: {op["TYPE"]}')
+
+def send_chat_message(str_message):
+    clientsocket.send(bmsg('msg', str_message))
+
+def process_quit():
+    clientsocket.send(bmsg('exit', None))
+    running = False
+
+def update_market(market_summary):
+    for i, (stockval, bln_div) in enumerate(market_summary):
+        gameboard.update_stock_price(i, stockval, bln_div)
+        market = market_summary
+
+def update_players(playerlist):
+    other_player_list = [ name for name in playerlist if name != args.name ]
+    gameboard.update_players(args.name, other_player_list)
+
+def update_game_status(game_status):
+    # NOTE: I think it makes sense for this to be a simple string from client to gameboard
+    # A status message typically is just a plain string
+    str_status = f'[Connected to {args.server}]'
+    if game_status['started']:
+        str_status += ' Game started'
+    else:
+        str_status += ' Waiting for game start'
+    gameboard.update_status(str_status)
+
+def update_player(player_status):
+    gameboard.update_player(player_status)
+    player.cash = player_status['cash']
+    player.portfolio = player_status['portfolio']
+    player.initialized = True # set flag that player object is ready to use 
+    # NOTE: networth is basically useless here? it's just for diplay IMO
+    
 #try:
 def main(stdscr):
+    curses.curs_set(0)
     
     global gameboard
+    global player
+    global market
     global running
+    global clientsocket
 
-    oClient = StockTickerClient(clientsocket)
-    gameboard = GameBoard(stdscr, stock_names, oClient)
+    gameboard = GameBoard(stdscr, stock_names)
     gameboard.debug = True
-    gameboard.redraw()
+    gameboard.redraw() # TODO: I think this is unnecessary, remove and make sure no screen drawing errors creep in
+
+    gameboard_thread = threading.Thread(target=process_gameboard_ops, args=(gameboard,))
+    gameboard_thread.start()
+
+    player = Player(args.name)
+    market = None
+
+    # --------------------------------------------------------
+    # Attempt connecton to game server
+    # --------------------------------------------------------
+    try:
+        clientsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        clientsocket.connect((gameserver, args.port))
+    except:
+        print (f"Connection to [{gameserver}] failed")
+        exit (1)
+    # MessageReceiver is duplicate of that found in chat_server_v3.py, so just give name 'server'
+    # msgrec is attached to selector and will simply process messages from the server
+    msgrec = MessageReceiver('server', clientsocket, process_message)
+    #clientsocket.send(bytes(args.name, 'UTF-8'))
+    clientsocket.send(bmsg('initconn',args.name))
+
+    sel = selectors.DefaultSelector()
+    #sel.register(clientsocket, selectors.EVENT_READ | selectors.EVENT_WRITE, None)
+    sel.register(clientsocket, selectors.EVENT_READ, None)
+
 
     # TODO: At this point, GameBoard's thread has started (on __init__) but this main thread has no way to react
     #     to keypresses in the GameBoard because this thread gets tied up below with select() calls
@@ -148,6 +216,18 @@ def main(stdscr):
     #     send us a message which would end the block.  STUPID, RIGHT?
     # IDEA: do we just give up and put select() on a timeout?? what is wrong with that?
     #       > is it just the using of resources??
+
+    # IDEA: Use threading.Event in GameBoard to send events to the client game instead of sending the
+    #     GameBoard an object with an API for the client.  This would mean the client thread is in charge
+    #     executing requests made by user through the GameBoard, instead of GameBoard/Keyboard thread 
+    #     executing game operations through the client API.  Advantage is the client data structures
+    #     don't need to be synchronized anymore. Instead the queue of of user input requests would need
+    #     to be synchronized.
+    # THOUGHT: there are situations where input could be made on the GameBoard that isn't valid based
+    #     on the current game state e.g. Issue a buy order, but the client has sent the buy order to server
+    #     for processing and we are awaiting the results (which would mean there is a market activity 
+    #     imminent and so we won't know what the stock prices are).  The GameBoard should try to limit
+    #     this through UI, but it can't be perfect.  SO WHICH WAY ADDRESSES THIS ISSUE BEST?
 
     # NOTE: main thread runs the selector loop
     # NOTE: KeyboardThread runs the curses input loop
@@ -172,13 +252,10 @@ def main(stdscr):
                         print ('Server disconnected')
                         msgrec.conn.close()
                         running = False
-        except Exception as e:
-            print ('main Exception start: ' + str(datetime.datetime.now()))
-            gameboard.dbg(f"interrupt: {e}\n")
-            print(f"interrupt: {e}")
+        except:
+            gameboard.program_exited = True
             running = False
-        if gameboard.has_exited():
-            running = False
+            print(traceback.format_exc())
     print ('end main: ' + str(datetime.datetime.now()))
 #clientsocket.close() # TODO: is it harmless to close again? check what purpose does it serve?
 #finally:

@@ -1,4 +1,5 @@
 import threading
+import queue
 import curses
 import curses.ascii
 import textwrap
@@ -8,6 +9,9 @@ import traceback # I need to print debug logs if exception raised, but also see 
 lst_log = []
 def log(msg):
     lst_log.append(str(msg))
+
+def game_operation(str_type, data):
+    return {'TYPE': str_type, 'DATA': data}
 
 class GameBoard(object):
     '''
@@ -75,13 +79,12 @@ class GameBoard(object):
         curses.KEY_RIGHT
     )
 
-    def __init__(self, stdscr, lst_stock_names, st_client):
+    def __init__(self, stdscr, lst_stock_names):
         self.scr = stdscr
         self.max_stock_price = 999 # no more than 3 digits!
         self.min_stock_price = 0
-        self.scr.addstr("Hello dude")
         self.stock_names = lst_stock_names
-        self.st_client = st_client
+        self.buysell_block_sz = 500
 
         self.fields = dict() # Field objects
         self.coords = dict() # named coordinate locations
@@ -93,10 +96,16 @@ class GameBoard(object):
 
         #TODO: concern: circular links seem wierd here...
         self.keyboard_thread = KeyboardThread('gameboard-thread', self.scr, self)
+        self.game_op_event = threading.Event()
+        self.game_op_queue = queue.SimpleQueue()
+
+        self.program_exited = False # so we can stop the KeyboardThread
+
+        self.scr.clear()
 
         # lets try a virtual window or two...
         #self.win_market = (1, 1, 11, 34) # uly, ulx, h, w
-        (scry, scrx) = stdscr.getmaxyx()
+        (scry, scrx) = self.scr.getmaxyx()
         self.win_main = Window(1, 1, scry-2, scrx-2)
 
         # Top section
@@ -156,10 +165,12 @@ class GameBoard(object):
 
         # last thing after all windows have drawn their lines, borders, etc
         self.draw_border(dict_border_cells)
+        self.scr.refresh()
+        #curses.doupdate() <-- probably remove this
+
         self.debug = False # show debugging msgs in the system message window if True
 
         self.keyboard_thread.start()
-        self.dbg("End of init")
 
     def dbg(self, msg):
         '''
@@ -207,6 +218,29 @@ class GameBoard(object):
         char_pays_div = "✓" if bln_pays_div else " "
         self.update_field(f'stockprice-{i_stock}', new_price)
         self.update_field(f'stockdiv-{i_stock}', char_pays_div)
+        price_per_block = int(new_price * self.buysell_block_sz / 100)
+        self.update_field(f'blockprice-{i_stock}', price_per_block)
+
+    def update_players(self, this_player_name, other_player_names):
+        '''
+        Update the players participating in the game.
+        called by a client program.  Following the design patter that it should
+        be up to the gameboard to decide how to display the names. 
+        '''
+        str_players = ', '.join([this_player_name + ' (me)'] + other_player_names)
+        self.update_field('players', str_players)
+
+    def update_player(self, player_status):
+        '''
+        Update this player's attributes
+        '''
+        self.update_field('cash', player_status['cash'])
+        self.update_field('networth', player_status['networth'])
+        for i, owned in enumerate(player_status['portfolio']):
+            self.update_field(f'stockowned-{i}', owned)
+
+    def update_status(self, str_status):
+        self.update_field('status', str_status)
 
     def add_system_msg(self, msg):
         self.sa_sysmsg.add_message(msg)
@@ -369,7 +403,7 @@ class GameBoard(object):
         self.buttongroups['blocksz'].set_nav('blocksz-inc', 'prev', 'blocksz-dec')
         #self.add_text(win, ybot+1, midx+1, '[')
         #self.add_text(win, ybot+1, win.width-2, ']')
-        self._add_field('blocksz', self.win_buysell, ybot+1, midx+4, 5, '>', initval=500)
+        self._add_field('blocksz', self.win_buysell, ybot+1, midx+4, 5, '>', initval=self.buysell_block_sz)
         
     def _init_draw_mkt_act(self, dict_border_cells):
         win = self.win_mkt_act
@@ -589,21 +623,15 @@ class GameBoard(object):
         else:
             self.activate_button_group(self.buttongroup_first.name)
 
+    def get_operation(self, block=True, timeout=5):
+        try:
+            retval = self.game_op_queue.get(block=block,timeout=timeout)
+        except queue.Empty as e:
+            return None
+        return retval
+
     def redraw(self):
         self.scr.redrawwin()
-
-    def has_exited(self):
-        '''
-        This will return true if player has requested to quit the 
-        program (e.g. by pressing [Q]uit button). Otherwise False
-        Client program should check this in its main loop
-        TODO: I think some kind of Client object will be created
-        and added to the gameboard eventually which will grant it an
-        API for client-related functions e.g. buy-shares, send-message,
-        etc.   Exit might be part of that functionality in which case
-        this method could be removed
-        '''
-        return self.keyboard_thread.has_exited
 
     # --END class GameBoard
 
@@ -1062,19 +1090,24 @@ class ButtonGroup():
 #  GameBoard. I think that makes sense since GameBoard has the hotkeys
 # etc.
 class KeyboardThread(threading.Thread):
-    def __init__(self, name, scr, gameboard):
+    def __init__(self, name, scr, gameboard, daemon=True):
         super().__init__(name=name)
         self.scr = scr
         self.msg = ""
         self.daemon = True
         self.running = False
         self.gameboard = gameboard
-        self.has_exited = False
 
     def run(self):
         self.running = True
+        self.scr.timeout(1000)
         while self.running:
+            # does not block (?) if scr.timeout > 0
             key = self.scr.getch() # blocking (since curses.nodelay() not called)
+            if key == -1:
+                if self.gameboard.program_exited:
+                    self.running = False
+                continue
             ckey = chr(key)
             self.gameboard.add_system_msg(f'KEYPRESS: {key}')
             if key in self.gameboard.keys_button_nav:
@@ -1095,12 +1128,20 @@ class KeyboardThread(threading.Thread):
             elif key == curses.KEY_STAB:
                 self.gameboard.buttongroup_nav('prev')
             elif ckey in ('q', 'Q'):
-                self.running = False
-                self.has_exited = True
+                #self.running = False
+                self.gameboard.game_op_queue.put(game_operation('quit', None))
+                self.running = False # when we know for sure we want to exit, stop the loop
             elif ckey in ('m', 'M'):
                 # TODO: how do we send the damn message????
-                msg = self.gameboard.input_chat_message()
-                self.gameboard.st_client.send_chat_message(msg)
+                str_msg = self.gameboard.input_chat_message()
+                if (str_msg):
+                    self.gameboard.game_op_queue.put(game_operation('chat-message', str_msg))
+            elif ckey in ('f', 'F'):
+                self.gameboard.add_system_msg('redraw requested')
+                self.gameboard.redraw()
+                self.gameboard.scr.refresh()
+                curses.doupdate()
+                # TODO: add an operation to the game_op_queue
         # end of while loop, to get here means program is exiting
                 
     def stop(self):

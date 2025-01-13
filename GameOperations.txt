@@ -1,0 +1,13 @@
+This file outlines the various "Game operations" that the client interface (GameBoard)
+can produce that the client will have to action (or ignore, etc)
+
+- send chat message
+- connect to server
+- enter/change name
+- place order to buy/sell shares
+- quit
+- request pause on market
+
+Operations provided by gameboard that the client is agnostic of:
+- changing the buy/sell button share count (BLOCK_SZ)
+- 
