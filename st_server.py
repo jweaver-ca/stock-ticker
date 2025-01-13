@@ -101,6 +101,7 @@ class ChatClient:
             print (f"EXCEPTION: {repr(e)}")
             
 
+# NOTE: I think this class is not needed...
 class StockMarket:
     ''' StockMarket
         Data structure for maintaining stock prices
@@ -150,11 +151,8 @@ class Player:
         self.portfolio = [ 0 for i in range(len(stock_names)) ]
         self.id = uuid.uuid4()
         self.cash = Player.INIT_CASH
+        self.game = None # reference to StockTickerGame
 
-    # in case of reconnection
-    def setClient(self, client):
-        self.client = client
-    
     # cash: amount of cash changed
     # less than zeros should be avoided by application, throw errors here
     def transaction(self, stock, shares, cash):
@@ -165,13 +163,65 @@ class Player:
         if self.cash < 0:
             raise ValueError('Less than zero cash')
     
+    def summary(self):
+        '''
+        Summary of this player's cash, net worth and market portfolio
+        for sending to client
+        '''
+        portfolio_val = 0
+        for i, shares in enumerate(self.portfolio):
+            price = self.game.market[i]
+            portfolio_val += shares * price
+        networth = self.cash + int(portfolio_val/100)
+        return {
+            'cash': self.cash,
+            'networth': networth,
+            'portfolio': self.portfolio
+        }
+
+class StockTickerGame():
+    '''
+    Encapsulates an entire session of Stock Ticker including the market
+    players.
+    '''
+    INIT_VAL = 100      # stock price for each at game start
+    OFF_MARKET_VAL = 0  # stock goes off market if <= this price
+    SPLIT_VAL = 200     # stock will split if >= this price
+    DIV_VAL = 105       # minimum stock price to pay dividends
+    def __init__(self):
+        self.market = [ StockTickerGame.INIT_VAL for i in range(len(stock_names)) ]
+        self.players = dict()
+        self.started = False # flag indicating if game underway or not
+
+    def add_player(self, player):
+        if player.name in (p.name for p in self.players.values()):
+            raise ValueError(f"Player [{player.name}] already in game")
+        if player.game is not None:
+            raise ValueError(f"Player [{player.name}] is in another game")
+        self.players[player.name] = player
+        player.game = self
+
+    def remove_player(self, playername):
+        del self.players[playername]
+
+    def market_summary(self):
+        '''
+        Get market summary to send to clients/players
+        [(stockval, bln_pays_dividend), ... for each stock
+        '''
+        return [(val, val>StockTickerGame.DIV_VAL) for val in self.market]
+
+    def status(self):
+        # NOTE: may add more details (e.g. paused,etc?), so using dictionary even though just 1 item...
+        return {'started': self.started}
 
 # NOTE: any use for supplying data here? Example in python selectors web page did...
 sel.register(serversocket, selectors.EVENT_READ, "listen-new")
 
-client_conns = dict()   # key: socket, value: ChatClient object
-# TODO: players should replace client_conns, since connection is part of the Player class?
-players = dict()  # key = player name
+# NOTE: One day server will be able to host multiple games so conceptually keeping
+#       the design such that the change will be easier
+game = StockTickerGame()
+players = dict()  # key = player name. *all* players in system
 market = StockMarket()
 
 # simple message object/dictionary
@@ -196,9 +246,9 @@ def process_message(message, playername):
     if message['TYPE'] == 'msg':
         # incoming chat message
         chat_msg = message['DATA']
-        send_all(bmsg('chatmsg', f'[{datetime.datetime.now()}] {name}: {chat_msg}'))
+        send_all(bmsg('chatmsg', f'[{datetime.datetime.now()}] {playername}: {chat_msg}'))
     elif message['TYPE'] == 'exit':
-        print (f'exit message recieved from {name}')
+        print (f'exit message recieved from {playername}')
         disconnect_client(player)
     
 def disconnect_client(player):
@@ -206,6 +256,7 @@ def disconnect_client(player):
     with lock: #Unsure how necessary or correct in logic this is...
         #del client_conns[oClient.conn]
         del players[player.name]
+        game.remove_player(player.name)
         sel.unregister(player.conn)
         player.conn.close()
     print (f'{player.name} has disconnected')
@@ -213,8 +264,6 @@ def disconnect_client(player):
 
 # msgobj: bytes of json message to send
 def send_all(msgobj):
-    #for iconn, iname in client_conns.items():
-    #for iname, oClient in client_conns.items():
     for player in players.values():
         player.conn.send(msgobj)
 
@@ -229,29 +278,33 @@ while running:
                 # this is a new connection, get name and register with selector
                 conn, addr = key.fileobj.accept()
                 validconnection = True # true if client provides expected and valid initial message
-                #conn.setblocking(False)
                 try:
                     msgrec = MessageReceiver('client', conn)
                     msgrec.add_bytes(conn.recv(1024))
                     init_msg = msgrec.get_message()  # blocks
                     print ("initial msg received from connecting client")
-                    name = init_msg['DATA']
-                    if name:
-                        if name in [x.name for x in players.values()]:
-                            conn.send(bmsg('error', f'client {name} already connected'))
-                            print (f'Connection from [{addr}] refused, {name} already connected')
+                    player_name = init_msg['DATA']
+                    if player_name:
+                        if player_name in [p.name for p in players.values()]:
+                            conn.send(bmsg('error', f'client {player_name} already connected'))
+                            print (f'Connection from [{addr}] refused, {player_name} already connected')
                             validconnection = False
                 except Exception:
                     print(traceback.format_exc())
                     validconnection = False
                 if validconnection:
                     conn.setblocking(False)
-                    players[name] = Player(name, conn)
-                    sel.register(conn, selectors.EVENT_READ, players[name])
+                    player = Player(player_name, conn)
+                    players[player_name] = player # add to system
+                    game.add_player(player)       # add to game
+                    sel.register(conn, selectors.EVENT_READ, players[player_name])
                     conn.send(bmsg('conn-accept', None))
-                    send_all(bmsg('joined', name))
-                    #client_conns[conn] = oClient
-                    print (f'[{name}] has joined. {len(client_conns)} total clients')
+                    conn.send(bmsg('initmkt', game.market_summary()))
+                    conn.send(bmsg('initplayer', player.summary()))
+                    conn.send(bmsg('playerlist', tuple(game.players.keys())))
+                    conn.send(bmsg('gamestat', game.status()))
+                    send_all(bmsg('joined', player_name))
+                    print (f'[{player_name}] has joined. {len(players)} total clients')
                 else:
                     conn.close()
             else:
@@ -274,8 +327,6 @@ while running:
                     else:
                         # disconnected
                         disconnect_client(player)
-                    # TODO: doesn't handle big messages
-                    # MOVED to process_message
     except KeyboardInterrupt:
         print ('#keyboard interrupt')
         running = False

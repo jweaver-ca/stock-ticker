@@ -84,6 +84,7 @@ class GameBoard(object):
         self.max_stock_price = 999 # no more than 3 digits!
         self.min_stock_price = 0
         self.stock_names = lst_stock_names
+        self.buysell_block_sz = 500
 
         self.fields = dict() # Field objects
         self.coords = dict() # named coordinate locations
@@ -217,6 +218,29 @@ class GameBoard(object):
         char_pays_div = "✓" if bln_pays_div else " "
         self.update_field(f'stockprice-{i_stock}', new_price)
         self.update_field(f'stockdiv-{i_stock}', char_pays_div)
+        price_per_block = int(new_price * self.buysell_block_sz / 100)
+        self.update_field(f'blockprice-{i_stock}', price_per_block)
+
+    def update_players(self, this_player_name, other_player_names):
+        '''
+        Update the players participating in the game.
+        called by a client program.  Following the design patter that it should
+        be up to the gameboard to decide how to display the names. 
+        '''
+        str_players = ', '.join([this_player_name + ' (me)'] + other_player_names)
+        self.update_field('players', str_players)
+
+    def update_player(self, player_status):
+        '''
+        Update this player's attributes
+        '''
+        self.update_field('cash', player_status['cash'])
+        self.update_field('networth', player_status['networth'])
+        for i, owned in enumerate(player_status['portfolio']):
+            self.update_field(f'stockowned-{i}', owned)
+
+    def update_status(self, str_status):
+        self.update_field('status', str_status)
 
     def add_system_msg(self, msg):
         self.sa_sysmsg.add_message(msg)
@@ -379,7 +403,7 @@ class GameBoard(object):
         self.buttongroups['blocksz'].set_nav('blocksz-inc', 'prev', 'blocksz-dec')
         #self.add_text(win, ybot+1, midx+1, '[')
         #self.add_text(win, ybot+1, win.width-2, ']')
-        self._add_field('blocksz', self.win_buysell, ybot+1, midx+4, 5, '>', initval=500)
+        self._add_field('blocksz', self.win_buysell, ybot+1, midx+4, 5, '>', initval=self.buysell_block_sz)
         
     def _init_draw_mkt_act(self, dict_border_cells):
         win = self.win_mkt_act

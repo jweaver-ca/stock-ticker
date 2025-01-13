@@ -7,6 +7,7 @@
 # - handle client disconnect by server
 
 import argparse
+import traceback
 import socket
 import threading
 import selectors
@@ -50,17 +51,12 @@ INIT_VAL = 100  # price each stock starts at
 stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
 stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
 
-class StockTickerClient():
-    # TODO: not part of the Event-centric GameBoard design: REMOVE
-    '''
-    This we passed to the GameBoard so that it can make calls here e.g.
-    send a chat message, request stock purchase etc.
-    '''
-    def __init__(self, socket):
-        self.socket = socket
-
-    def send_chat_message(self, str_message):
-        self.socket.send(bmsg('msg', str_message))
+class Player:
+    def __init__(self, name):
+        self.name = name
+        self.portfolio = [ 0 for i in range(len(stock_names)) ]
+        self.cash = 0
+        self.initialized = False # server needs to send info before use
 
 # simple message object/dictionary
 # TODO: rename msg because it shares name with message type 'msg' / confusing
@@ -94,29 +90,23 @@ def process_message(msgobj):
     elif msgobj['TYPE'] == 'server-exit':
         gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]\n')
         running = False
-
-# --------------------------------------------------------
-# Attempt connecton to game server
-# --------------------------------------------------------
-try:
-    clientsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    clientsocket.connect((gameserver, args.port))
-except:
-    print (f"Connection to [{gameserver}] failed")
-    exit (1)
-# MessageReceiver is duplicate of that found in chat_server_v3.py, so just give name 'server'
-# msgrec is attached to selector and will simply process messages from the server
-msgrec = MessageReceiver('server', clientsocket, process_message)
-#clientsocket.send(bytes(args.name, 'UTF-8'))
-clientsocket.send(bmsg('initconn',args.name))
-
-sel = selectors.DefaultSelector()
-#sel.register(clientsocket, selectors.EVENT_READ | selectors.EVENT_WRITE, None)
-sel.register(clientsocket, selectors.EVENT_READ, None)
+    elif msgobj['TYPE'] == 'initmkt':
+        update_market(msgobj['DATA'])
+    elif msgobj['TYPE'] == 'playerlist':
+        update_players(msgobj['DATA'])
+    elif msgobj['TYPE'] == 'gamestat':
+        update_game_status(msgobj['DATA'])
+    elif msgobj['TYPE'] == 'initplayer':
+        update_player(msgobj['DATA'])
+    else:
+        raise ValueError(f"unknown message type received: [{msgobj['TYPE']}]")
 
 # globals TODO: is there a better way?
 running = True
+player = None # NOTE/TODO: not sure how necessary it is to keep client copies of player/market
+market = None # [ (stockval, bln_dividend), (stockval, bln_dividend), etc ]
 gameboard = None
+clientsocket = None
 
 # TODO: clientsocket is global. probably not great
 # NOTE: since select() is hard/impossible to interrupt without timeout, maybe the solution
@@ -151,13 +141,41 @@ def process_quit():
     clientsocket.send(bmsg('exit', None))
     running = False
 
+def update_market(market_summary):
+    for i, (stockval, bln_div) in enumerate(market_summary):
+        gameboard.update_stock_price(i, stockval, bln_div)
+        market = market_summary
 
+def update_players(playerlist):
+    other_player_list = [ name for name in playerlist if name != args.name ]
+    gameboard.update_players(args.name, other_player_list)
+
+def update_game_status(game_status):
+    # NOTE: I think it makes sense for this to be a simple string from client to gameboard
+    # A status message typically is just a plain string
+    str_status = f'[Connected to {args.server}]'
+    if game_status['started']:
+        str_status += ' Game started'
+    else:
+        str_status += ' Waiting for game start'
+    gameboard.update_status(str_status)
+
+def update_player(player_status):
+    gameboard.update_player(player_status)
+    player.cash = player_status['cash']
+    player.portfolio = player_status['portfolio']
+    player.initialized = True # set flag that player object is ready to use 
+    # NOTE: networth is basically useless here? it's just for diplay IMO
+    
 #try:
 def main(stdscr):
     curses.curs_set(0)
     
     global gameboard
+    global player
+    global market
     global running
+    global clientsocket
 
     gameboard = GameBoard(stdscr, stock_names)
     gameboard.debug = True
@@ -165,6 +183,28 @@ def main(stdscr):
 
     gameboard_thread = threading.Thread(target=process_gameboard_ops, args=(gameboard,))
     gameboard_thread.start()
+
+    player = Player(args.name)
+    market = None
+
+    # --------------------------------------------------------
+    # Attempt connecton to game server
+    # --------------------------------------------------------
+    try:
+        clientsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        clientsocket.connect((gameserver, args.port))
+    except:
+        print (f"Connection to [{gameserver}] failed")
+        exit (1)
+    # MessageReceiver is duplicate of that found in chat_server_v3.py, so just give name 'server'
+    # msgrec is attached to selector and will simply process messages from the server
+    msgrec = MessageReceiver('server', clientsocket, process_message)
+    #clientsocket.send(bytes(args.name, 'UTF-8'))
+    clientsocket.send(bmsg('initconn',args.name))
+
+    sel = selectors.DefaultSelector()
+    #sel.register(clientsocket, selectors.EVENT_READ | selectors.EVENT_WRITE, None)
+    sel.register(clientsocket, selectors.EVENT_READ, None)
 
 
     # TODO: At this point, GameBoard's thread has started (on __init__) but this main thread has no way to react
@@ -215,7 +255,7 @@ def main(stdscr):
         except:
             gameboard.program_exited = True
             running = False
-            print ('main Exception start: ' + str(datetime.datetime.now()))
+            print(traceback.format_exc())
     print ('end main: ' + str(datetime.datetime.now()))
 #clientsocket.close() # TODO: is it harmless to close again? check what purpose does it serve?
 #finally:
