@@ -37,12 +37,20 @@ parser.add_argument("--port", "-p", type=int, default=default_args['port'], help
 args = parser.parse_args() 
 gameserver = args.server
 
+# game rules TODO: these should come from the server
+# in any case, these value MUST match the server...
+DIV_MIN = 105 # minimum stock value to pay dividends
+SPLIT_VAL = 200 # when a stock reachese this value it splits
+BUST_VAL = 0    # stock goes "off the market" if at or below this value
+INIT_VAL = 100  # price each stock starts at
+
 # Could use Enum.. no real need I think...
 # TODO: decide if simplenamespace or just a plain old array of string for stocks...
 stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
 stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
 
 class StockTickerClient():
+    # TODO: not part of the Event-centric GameBoard design: REMOVE
     '''
     This we passed to the GameBoard so that it can make calls here e.g.
     send a chat message, request stock purchase etc.
@@ -109,17 +117,12 @@ sel.register(clientsocket, selectors.EVENT_READ, None)
 running = True
 gameboard = None
 
-# process keyboard instruction to quit.
 # TODO: clientsocket is global. probably not great
 # NOTE: since select() is hard/impossible to interrupt without timeout, maybe the solution
 #   is to send/recieve a final message
 # Send a note to server that we are disconnecting.
 # NOTE: the close() call on the socket should *ONLY* be done when a 0-byte read message has been
 #    received from the server... right??  What about if the *server* initiates the shut-down?
-def disconnect():
-    msgrec.conn.send(bmsg('exit', None))
-    msgrec.conn.shutdown(socket.SHUT_WR)
-    #msgrec.conn.close()
 
 # NOTE: while main is executing wrapped in curses.wrapper I can't seem to get access to
 #   exceptions thrown within main.  curses handles them all, which means I can't use
@@ -128,14 +131,18 @@ def disconnect():
 # NOTE: selectors says if a signal is received in the thread  where .select() is block
 #   it might just return an empty list
 
+def process_gameboard_ops(gameboard):
+    while True:
+        op = gameboard.get_operation() # blocking
+
 #try:
 def main(stdscr):
+    curses.curs_set(0)
     
     global gameboard
     global running
 
-    oClient = StockTickerClient(clientsocket)
-    gameboard = GameBoard(stdscr, stock_names, oClient)
+    gameboard = GameBoard(stdscr, stock_names)
     gameboard.debug = True
     gameboard.redraw()
 

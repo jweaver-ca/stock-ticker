@@ -76,13 +76,11 @@ class GameBoard(object):
         curses.KEY_RIGHT
     )
 
-    def __init__(self, stdscr, lst_stock_names, st_client):
+    def __init__(self, stdscr, lst_stock_names):
         self.scr = stdscr
         self.max_stock_price = 999 # no more than 3 digits!
         self.min_stock_price = 0
-        self.scr.addstr("Hello dude")
         self.stock_names = lst_stock_names
-        self.st_client = st_client
 
         self.fields = dict() # Field objects
         self.coords = dict() # named coordinate locations
@@ -1103,7 +1101,7 @@ class KeyboardThread(threading.Thread):
             elif ckey in ('m', 'M'):
                 # TODO: how do we send the damn message????
                 msg = self.gameboard.input_chat_message()
-                self.gameboard.st_client.send_chat_message(msg)
+                # TODO: add an operation to the op_queue
         # end of while loop, to get here means program is exiting
                 
     def stop(self):

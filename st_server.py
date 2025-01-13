@@ -31,14 +31,17 @@ import socket
 #import threading
 import selectors
 import threading
+import traceback
 #import pickle # for encoding messages to bytes -- whoops, use json instead
 import json
 import struct # for predictable integer (message size) encoding to bytes
 import datetime
 import uuid
 import types # SimpleNamespace for stock enum-ish construct?
+from st_common import MessageReceiver
 
 stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
+stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
 
 sel = selectors.DefaultSelector()
 
@@ -88,13 +91,7 @@ class ChatClient:
                         self.msg += b[0:required_bytes]
                         # TODO: process message
                         self.message = json.loads(self.msg.decode('utf-8'))
-                        if self.message['TYPE'] == 'initconn':
-                            # setname is the initial message
-                            if self.name:
-                                raise ValueError('Attempt to set name again for {self.name} -> {omsg["DATA"]}')
-                            self.set_name(self.message['DATA'])
-                        else:
-                            process_message(self)
+                        process_message(self)
                         b = b[required_bytes:]
                         self.sz_bytes = b''
                         self.remaining_sz_bytes = 4
@@ -147,13 +144,14 @@ class StockMarket:
 class Player:
     INIT_CASH = 5000
 
-    def __init__(self, client):
-        self.client = client
-        self.portfolio = {}
-        for s in stock:
-            self.portfolio[s] = 0
+    def __init__(self, name, conn):
+        self.name = name
+        self.conn = conn
+        self.message_receiver = MessageReceiver(f'msgrec-{name}', conn, process_message)
+        self.message_receiver.data = name
+        self.portfolio = [ 0 for i in range(len(stock_names)) ]
         self.id = uuid.uuid4()
-        self.cash = INIT_CASH
+        self.cash = Player.INIT_CASH
 
     # in case of reconnection
     def setClient(self, client):
@@ -174,6 +172,8 @@ class Player:
 sel.register(serversocket, selectors.EVENT_READ, "listen-new")
 
 client_conns = dict()   # key: socket, value: ChatClient object
+# TODO: players should replace client_conns, since connection is part of the Player class?
+players = dict()  # key = player name
 
 # simple message object/dictionary
 def msg(strType, strData):
@@ -188,32 +188,32 @@ def bmsg(strType, strData):
 
 # process a message recieved from a client
 #def process_message(msgobj, name):
-def process_message(oClient):
-    msgobj = oClient.message    
-    name = oClient.name
-    if msgobj['TYPE'] == 'msg':
+def process_message(message, playername):
+    player = players[playername]
+    if message['TYPE'] == 'msg':
         # incoming chat message
-        chat_msg = msgobj['DATA']
+        chat_msg = message['DATA']
         send_all(bmsg('chatmsg', f'[{datetime.datetime.now()}] {name}: {chat_msg}'))
-    elif msgobj['TYPE'] == 'exit':
+    elif message['TYPE'] == 'exit':
         print (f'exit message recieved from {name}')
-        disconnect_client(oClient)
+        disconnect_client(player)
     
-def disconnect_client(oClient):
-    print (f'disconnect_client called for {oClient.name}')
+def disconnect_client(player):
+    print (f'disconnect_client called for {player.name}')
     with lock: #Unsure how necessary or correct in logic this is...
-        del client_conns[oClient.conn]
-        sel.unregister(oClient.conn)
-        oClient.conn.close()
-    print (f'{oClient.name} has disconnected')
-    send_all(bmsg('disconnect', oClient.name))
+        #del client_conns[oClient.conn]
+        del players[player.name]
+        sel.unregister(player.conn)
+        player.conn.close()
+    print (f'{player.name} has disconnected')
+    send_all(bmsg('disconnect', player.name))
 
 # msgobj: bytes of json message to send
 def send_all(msgobj):
     #for iconn, iname in client_conns.items():
     #for iname, oClient in client_conns.items():
-    for conn, oClient in client_conns.items():
-        conn.send(msgobj)
+    for player in players.values():
+        player.conn.send(msgobj)
 
 running = True
 while running:
@@ -228,37 +228,38 @@ while running:
                 validconnection = True # true if client provides expected and valid initial message
                 #conn.setblocking(False)
                 try:
-                    oClient = ChatClient(conn)
-                    oClient.add_bytes(conn.recv(1024)) # should recieve name
-                    print ('here')
-                    if oClient.name:
-                        if oClient.name in [x.name for x in client_conns.values()]:
+                    msgrec = MessageReceiver('client', conn)
+                    msgrec.add_bytes(conn.recv(1024))
+                    init_msg = msgrec.get_message()  # blocks
+                    print ("initial msg received from connecting client")
+                    name = init_msg['DATA']
+                    if name:
+                        if name in [x.name for x in players.values()]:
                             conn.send(bmsg('error', f'client {name} already connected'))
                             print (f'Connection from [{addr}] refused, {name} already connected')
                             validconnection = False
-                    else:
-                        conn.send(bmsg('error', 'bad request'))
-                        print(f'Bad request from [{addr}]: {msg}')
-                        validconnection = False
                 except Exception:
+                    print(traceback.format_exc())
                     validconnection = False
                 if validconnection:
                     conn.setblocking(False)
-                    sel.register(conn, selectors.EVENT_READ, None)
+                    players[name] = Player(name, conn)
+                    sel.register(conn, selectors.EVENT_READ, players[name])
                     conn.send(bmsg('conn-accept', None))
-                    send_all(bmsg('joined', oClient.name))
-                    client_conns[conn] = oClient
-                    oClient.initialized = True
-                    print (f'[{oClient.name}] has joined. {len(client_conns)} total clients')
+                    send_all(bmsg('joined', name))
+                    #client_conns[conn] = oClient
+                    print (f'[{name}] has joined. {len(client_conns)} total clients')
                 else:
                     conn.close()
             else:
                 # HMM: when would selectors.EVENT_WRITE ever be used??
                 # this is an incoming message from a connected client, or ??
+                player = key.data
                 conn = key.fileobj
                 if mask & selectors.EVENT_READ:
-                    oClient = client_conns[conn]
-                    print (f'READ event from {oClient.name}')
+                    msgrec = player.message_receiver
+
+                    print (f'READ event from {player.name}')
                     try:
                         b = conn.recv(1024)
                     except Exception as e:
@@ -266,10 +267,10 @@ while running:
                         print (f'conn.recv Exc: {e}')
                         b = None
                     if b:
-                        oClient.add_bytes(b)
+                        msgrec.add_bytes(b)
                     else:
                         # disconnected
-                        disconnect_client(oClient)
+                        disconnect_client(player)
                     # TODO: doesn't handle big messages
                     # MOVED to process_message
     except KeyboardInterrupt:
@@ -277,6 +278,7 @@ while running:
         running = False
     except Exception as e:
         print (f'ERROR in main loop: {e}')
+        print (traceback.format_exc())
 send_all(bmsg('server-exit', None))
 serversocket.close()
 
