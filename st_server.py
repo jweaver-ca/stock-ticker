@@ -141,7 +141,7 @@ class StockTickerGame():
         self.AMOUNT_DIE = (5, 10, 20)
 
         self.option_ignore_nopay_divrolls = True
-        self.option_timer_seconds = 4
+        self.option_timer_seconds = 1
 
         #self.stock_names = stock_names hmm not needed
         self.market = [ self.INIT_VAL for i in range(len(stock_names)) ]
@@ -193,23 +193,41 @@ class StockTickerGame():
     def process_order(self, player, buysell_order):
         ''' Apply the buy/sell order '''
         total_cents_spent = 0
+        approve_data = {
+            'reqid': buysell_order['reqid'],
+            'prices': [],
+            'reject-reason': None
+        }
         with self.market_lock:
             new_shares_totals = player.portfolio.copy()
-            for i, shares in enumerate(buysell_order['shares']):
-                total_dollars_spent += shares * self.market[i]
-                new_shares_totals[i] -= shares
+            for i, (shares, expected_price) in enumerate(buysell_order['data']):
+                approve_data['prices'].append(self.market[i])
+                total_cents_spent += shares * self.market[i]
+                new_shares_totals[i] += shares
+            total_dollars_spent = int(total_cents_spent / 100)
+            print (f'{total_dollars_spent=} {new_shares_totals=}')
             bln_enough_cash = total_dollars_spent <= player.cash
             bln_enough_shares = all((s>=0 for s in new_shares_totals)) 
             if bln_enough_cash and bln_enough_shares:
-                player.cash += int(total_cents_spent / 100)
+                player.cash -= total_dollars_spent
                 player.portfolio = new_shares_totals
+                approve_data['cost'] = total_dollars_spent
                 bln_approved = True
             else:
-                bln_approved = True
-        approve_data = {
-            'reqid': buysell_call['reqid'],
-            'approve': bln_approved
-        }
+                approve_data['cost'] = 0
+                reasons = []
+                if not bln_enough_cash:
+                    reasons.append('not enough cash')
+                if not bln_enough_shares:
+                    reasons.append('not enough shares')
+                if reasons:
+                    approve_data['reject-reason'] = '/'.join(reasons)
+                else:
+                    approve_data['reject-reason'] = '???'
+                bln_approved = False
+            approve_data['approved'] = bln_approved
+            approve_data['cash'] = player.cash
+            approve_data['portfolio'] = player.portfolio
         player.conn.send(bmsg('approve', approve_data))
         
     # NOTE: this should be called with the market_lock acquired
@@ -283,13 +301,14 @@ class StockTickerGame():
             if roll['action'] == 'DIV' and self.pays_dividend(roll['stock']):
                 for player in self.players.values():
                     # dividend 20 paid out
-                    div_dollars = int(player.portfolio[roll['stock']] * 0.2)
+                    div_dollars = int(player.portfolio[roll['stock']] * roll['amount']/100)
                     if div_dollars:
                         player.cash += div_dollars
                         div_msg_data = {
                             'stock': roll['stock'],
                             'amount': roll['amount'],
-                            'divpaid': div_dollars
+                            'divpaid': div_dollars,
+                            'playercash': player.cash
                         }
                         player.conn.send(bmsg('div', div_msg_data))
         if price_change_data:
@@ -346,7 +365,7 @@ def process_message(message, playername):
             send_all(bmsg('start', None))
             send_all(bmsg('gamestat', game.status()))
     elif message['TYPE'] == 'buysell':
-        game.process_order(message['DATA'])
+        game.process_order(player, message['DATA'])
     else:
         # ERROR
         player.conn.send(bmsg('error', f'Unrecognized message type: {message["DATA"]}'))
@@ -429,8 +448,6 @@ while running:
                 conn = key.fileobj
                 if mask & selectors.EVENT_READ:
                     msgrec = player.message_receiver
-
-                    print (f'READ event from {player.name}')
                     try:
                         b = conn.recv(1024)
                     except Exception as e:

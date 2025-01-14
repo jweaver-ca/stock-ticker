@@ -1,4 +1,5 @@
 import threading
+import uuid
 import queue
 import curses
 import curses.ascii
@@ -88,8 +89,7 @@ class GameBoard(object):
         self.player_cash = 0
         self.player_owned = [ 0 for s in lst_stock_names ]
         self.buysell_block_sz = 500
-        self.pending_order = None
-        self.reset_pending_order()
+        self.pending_order = [ 0 for s in lst_stock_names ]
 
         self.fields = dict() # Field objects
         self.coords = dict() # named coordinate locations
@@ -136,7 +136,7 @@ class GameBoard(object):
         # bottom of screen
         # hotkey
         self.win_hotkey = Window(self.win_main.BY(), self.win_main.LX(), 1, self.win_main.width) 
-        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]equest Pause  [Q]uit  [S]tart Game')
+        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]eady  [S]ubmit Order  [P]ause  [Q]uit')
 
         # chatmsg - entry window for typing chat message to other players
         self.win_chatmsg = Window(self.win_hotkey.TY()-2, self.win_main.LX(), 1, self.win_main.width) 
@@ -411,8 +411,6 @@ class GameBoard(object):
         self.buttongroups['blocksz'].set_nav('blocksz-dec', 'next', 'blocksz-inc')
         self.buttongroups['blocksz'].set_nav('blocksz-inc', 'left', 'blocksz-dec')
         self.buttongroups['blocksz'].set_nav('blocksz-inc', 'prev', 'blocksz-dec')
-        #self.add_text(win, ybot+1, midx+1, '[')
-        #self.add_text(win, ybot+1, win.width-2, ']')
         self._add_field('blocksz', self.win_buysell, ybot+1, midx+4, 5, '>', initval=self.buysell_block_sz)
         
     def _init_draw_mkt_act(self, dict_border_cells):
@@ -596,7 +594,13 @@ class GameBoard(object):
         curses.noecho()
         # NOTE: refresh required to clear out the contents and hide the cursor, etc
         curses_win.refresh()
+        
         return msg
+
+    def update_player_cash(self, playercash, networth):
+        self.playercash = playercash
+        self.update_field('cash', playercash)
+        self.update_field('networth', networth)
 
     def display_die_roll(self, roll_data):
         self.sa_mkt_act.add_message(f'{self.stock_names[roll_data["stock"]]} {roll_data["action"]} {roll_data["amount"]}')
@@ -615,6 +619,10 @@ class GameBoard(object):
         # NOTE: getstr really has to go in a curses window proper, else the entry
         #   ruins stuff to the right that's in the same window
         chat_msg = GameBoard.read_str(self.cwin_chatmsg_in).decode('utf-8')
+        # NOTE/TODO: adding redrawwin call here to see if it helps with an issue noticed
+        #   after sending a message and the screen goes wonky.
+        #   if this doesn't fix it, the call should be removed
+        gameboard.scr.redrawwin()
         return chat_msg
         # TODO: actually send the dang message
 
@@ -625,14 +633,17 @@ class GameBoard(object):
         return int(cost_cents / 100)
 
     def reset_pending_order(self):
-        self.pending_order = list(0 for x in self.stock_names)
+        for i in range(len(self.stock_names)):
+            self.pending_order[i] = 0
+            self.update_field(f'pending-{i}', self.pending_order[i])
+        self.update_pending()
 
     def update_pending(self):
         ''' called to reflect new market prices '''
         self.update_field(f'pending-$', self.pending_order_cost())
 
     def update_pending_order(self, order_data):
-        ''' Called buy clicking a buysell button '''
+        ''' Called by clicking a buysell button '''
         i_stock = order_data['stock']
         share_count = self.buysell_block_sz
         if order_data['action'] == 'buy':
@@ -640,7 +651,7 @@ class GameBoard(object):
             extra_cost = int(self.stock_prices[i_stock] * share_count / 100)
             projected_total = current_cost + extra_cost
             if projected_total > self.player_cash:
-                self.dbg('cant afford it')
+                self.dbg(f'cant afford it: {self.player_cash=} {current_cost=} {extra_cost=} {projected_total=}')
                 return # cant afford it, ignore
             share_total = self.pending_order[i_stock] + share_count 
         elif order_data['action'] == 'sell':
@@ -652,6 +663,26 @@ class GameBoard(object):
         self.update_field(f'pending-{i_stock}', share_total)
         new_projected_total = self.pending_order_cost()
         self.update_field(f'pending-$', new_projected_total)
+
+    def buysell_approval(self, data):
+        if data['approved']:
+            self.add_system_msg(f'BuySell order #{data["reqid"]} approved')
+        else:
+            self.add_system_msg(f'BuySell order #{data["reqid"]} REJECTED ({data["reject-reason"]})')
+        self.reset_pending_order()
+
+    def report_div(self, i_stock, earned):
+        self.add_system_msg(f'{self.stock_names[i_stock]} dividend earned you ${earned}!')
+
+    def buysell_operation(self):
+        '''Create operation based on pending_order and current prices'''
+        # TODO: track reqid make sure it gets answered?? any reason why/why not?
+        reqid = str(uuid.uuid4())
+        order_data = []
+        for i, shares in enumerate(self.pending_order):
+            curprice = self.stock_prices[i]
+            order_data.append((shares, curprice))
+        return {'reqid': reqid, 'data': order_data}
 
     def nav(self, motion):
         '''
@@ -681,6 +712,7 @@ class GameBoard(object):
             self.activate_button_group(self.buttongroup_first.name)
 
     def get_operation(self, block=True, timeout=5):
+        ''' Client calls this to get the next action requested by player'''
         try:
             retval = self.game_op_queue.get(block=block,timeout=timeout)
         except queue.Empty as e:
@@ -1197,10 +1229,14 @@ class KeyboardThread(threading.Thread):
                 self.gameboard.redraw()
                 self.gameboard.scr.refresh()
                 curses.doupdate()
-            elif ckey in ('s', 'S'):
+            elif ckey in ('r', 'R'):
                 # request to start game (basically "I'm ready" message to server)
                 self.gameboard.game_op_queue.put(game_operation('ready-start', None))
                 # TODO: add an operation to the game_op_queue
+            elif ckey in ('p', 'P'):
+                self.gameboard.add_system_msg('Pause requested: not implemented')
+            elif ckey in ('s', 'S'):
+                self.gameboard.game_op_queue.put(game_operation('buysell', self.gameboard.buysell_operation()))
             elif key in (curses.ascii.SP, curses.ascii.CR):
                 if not self.gameboard.active_buttongroup:
                     self.gameboard.dbg('click but no active button group')

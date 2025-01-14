@@ -59,6 +59,18 @@ class Player:
         self.initialized = False # server needs to send info before use
         self.ready_start = False
 
+    def networth(self, market_prices=None):
+        # market MUST be included if any holdings
+        if any(s>0 for s in self.portfolio) and market_prices is None:
+            raise RuntimeError("networth cannot be calculated without market")
+        if market_prices is None:
+            return self.cash
+        else:
+            holdings = 0
+            for i, price in enumerate(market_prices):
+                holdings += int(self.portfolio[i] * price / 100)
+            return self.cash + holdings
+
 class StockMarket:
     def __init__(self):
         self.prices = None
@@ -91,49 +103,60 @@ def process_message(msgobj):
     global running
     global gameboard
     #msgobj = oClient.message
-    if msgobj['TYPE'] == 'chatmsg':
-        #globalscr.addstr(msgobj['DATA'] + '\n')
-        gameboard.add_system_msg(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'error':
+    mtype = msgobj['TYPE']
+    mdata = msgobj['DATA']
+    if mtype == 'chatmsg':
+        #globalscr.addstr(mdata + '\n')
+        gameboard.add_system_msg(mdata)
+    elif mtype == 'error':
         gameboard.add_system_msg(f'ERROR FROM SERVER: {msgobj["DATA"]}\n')
         running = False
-    elif msgobj['TYPE'] == 'conn-accept':
+    elif mtype == 'conn-accept':
         gameboard.add_system_msg("** connection to server accepted **\n")
-    elif msgobj['TYPE'] == 'disconnect':
+    elif mtype == 'disconnect':
         gameboard.add_system_msg(f'[{msgobj["DATA"]} has disconnected]\n')
-    elif msgobj['TYPE'] == 'joined':
+    elif mtype == 'joined':
         gameboard.add_system_msg(f'[{msgobj["DATA"]} has joined]\n')
-    elif msgobj['TYPE'] == 'server-exit':
+    elif mtype == 'server-exit':
         gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]\n')
         running = False
-    elif msgobj['TYPE'] == 'initmkt':
-        update_market(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'playerlist':
-        update_players(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'gamestat':
-        update_game_status(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'actiontime':
+    elif mtype == 'initmkt':
+        update_market(mdata)
+    elif mtype == 'playerlist':
+        update_players(mdata)
+    elif mtype == 'gamestat':
+        update_game_status(mdata)
+    elif mtype == 'actiontime':
         # TODO: animate the countdown timer
         pass
         #gameboard.add_system_msg(f'Countdown to roll started: {msgobj["DATA"]}')
-    elif msgobj['TYPE'] == 'roll':
-        gameboard.display_die_roll(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'market':
-        d = msgobj['DATA']
-        gameboard.update_stock_price(d['stock'], d['newprice'], d['div'])
-    elif msgobj['TYPE'] == 'split':
-        gameboard.display_split_message(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'offmarket':
-        gameboard.display_bust_message(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'initplayer':
-        update_player(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'start':
+    elif mtype == 'roll':
+        gameboard.display_die_roll(mdata)
+    elif mtype == 'market':
+        gameboard.update_stock_price(mdata['stock'], mdata['newprice'], mdata['div'])
+    elif mtype == 'approve':
+        gameboard.dbg(f'approve-msg: {mdata}')
+        if mdata['approved']:
+            update_player({'cash': mdata['cash'], 'portfolio': mdata['portfolio']}, (i[0] for i in market))
+        gameboard.buysell_approval(mdata)
+    elif mtype == 'split':
+        gameboard.display_split_message(mdata)
+    elif mtype == 'offmarket':
+        gameboard.display_bust_message(mdata)
+    elif mtype == 'initplayer':
+        update_player(mdata)
+    elif mtype == 'start':
         gameboard.add_system_msg('All players ready. Game has started!')
-    elif msgobj['TYPE'] == 'servermsg':
-        gameboard.add_system_msg(str(msgobj['DATA']))
+    elif mtype == 'servermsg':
+        gameboard.add_system_msg(str(mdata))
+    elif mtype == 'div':
+        player.cash = mdata['playercash']
+        gameboard.report_div(mdata['stock'], mdata['divpaid'])
+        gameboard.update_player_cash(mdata['playercash'],player.networth((s[0] for s in market)))
+
         # TODO set any flags here to allow gameplay
     else:
-        raise ValueError(f"unknown message type received: [{msgobj['TYPE']}] data:{msgobj['DATA']}")
+        raise ValueError(f"unknown message type received: [{mtype}] data:{mdata}")
 
 # globals TODO: is there a better way?
 running = True
@@ -161,16 +184,21 @@ def process_gameboard_ops(gameboard):
         op = gameboard.get_operation(block=True, timeout=2) # blocking
         if op is None:
             continue # timeout reached
-        if op['TYPE'] == 'chat-message':
+        otype = op['TYPE']
+        odata = op['DATA']
+        if otype == 'chat-message':
             send_chat_message(op['DATA'])
-        elif op['TYPE'] == 'quit':
+        elif otype == 'quit':
             process_quit()
-        elif op['TYPE'] == 'ready-start':
+        elif otype == 'ready-start':
             if not player.ready_start:
-                clientsocket.send(bmsg('start', op['DATA']))
+                clientsocket.send(bmsg('start', odata))
                 player.ready_start = True
             else:
                 gameboard.dbg('game start requested again')
+        elif otype == 'buysell':
+            # TODO: game status must be checked
+            clientsocket.send(bmsg('buysell', odata))
         else:
             gameboard.add_system_msg('ERROR: bad game operation type: {op["TYPE"]}')
 
@@ -182,9 +210,10 @@ def process_quit():
     running = False
 
 def update_market(market_summary):
+    global market
     for i, (stockval, bln_div) in enumerate(market_summary):
         gameboard.update_stock_price(i, stockval, bln_div)
-        market = market_summary
+    market = market_summary
 
 def update_players(playerlist):
     other_player_list = [ name for name in playerlist if name != args.name ]
@@ -200,10 +229,11 @@ def update_game_status(game_status):
         str_status += ' Waiting for game start'
     gameboard.update_status(str_status)
 
-def update_player(player_status):
-    gameboard.update_player(player_status)
+def update_player(player_status, market=None):
     player.cash = player_status['cash']
     player.portfolio = player_status['portfolio']
+    player_status['networth'] = player.networth(market)
+    gameboard.update_player(player_status)
     player.initialized = True # set flag that player object is ready to use 
     # NOTE: networth is basically useless here? it's just for diplay IMO
     

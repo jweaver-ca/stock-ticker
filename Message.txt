@@ -26,16 +26,16 @@ C       exit        Alert client exit               n/a
  S      servermsg   Generic message from server     string
 --- GAME RELATED ---
 CS      start       Start game/alert game started   n/a
-CS      buysell     Buy/Sell stock                  {reqid: ???, shares: [ 500, -1500, 0 ...]} server {reqid: ???}  
+ S      buysell     Buy/Sell stock                  {reqid: ???, data: [ (shares, purchprice), etc 500, -1500, 0 ...]} 
 C       pause       Pause market briefly            n/a
  S      initmkt     Markets initial status          (all stock prices), simple list of 6 2-tuple (price, bln_div) [(100, False), (105, True)...etc
  S      initplayer  Player's initial status         TODO
- S      approve     Approval of buy/sell            {reqid: ???, approved: bln}
+ S      approve     Approval of buy/sell            {reqid: ???, approved: bln, 'prices': 6 actual_prices, 'cost': n, 'cash': n, 'portfolio': 6 shares, 'reject-reason': str}
  S      trades      Summary of trades               (not sure data yet)
  S      actiontime  Market action coming soon       seconds
  S      roll        Results of die roll             {stock: #, action: 'UP'etc, amount: int}
  S      market      Market price change             {stock: #, amount: #, newprice: #, div: bln}
- S      div         Dividend                        {stock: #, amount: #, earnings: #}
+ S      div         Dividend                        {stock: #, amount: #, divpaid: #, playercash: #}
  S      offmarket   Stock went off market           {stock: #, newprice: #, div: bln}
  S      split       Stock split                     {stock: 0-5, newprice: #, div: bln, shares: (new_total), divpaid: dollars}
  S      gamestat    Game status                     dictionary (very likely to change alot during dev)
