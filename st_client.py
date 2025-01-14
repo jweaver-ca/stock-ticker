@@ -59,6 +59,21 @@ class Player:
         self.initialized = False # server needs to send info before use
         self.ready_start = False
 
+class StockMarket:
+    def __init__(self):
+        self.prices = None
+        self.initialized = False # server needs to send info before use
+
+    def shareprice(self, i_stock):
+        if not self.initialized:
+            raise RuntimeError(f"StockMarket not initialized")
+        return self.prices[i_stock]
+
+class ClientGame:
+    def __init__(self, player, market):
+        self.player = player
+        self.market = market
+
 # simple message object/dictionary
 # TODO: rename msg because it shares name with message type 'msg' / confusing
 def msg(strType, strData):
@@ -97,6 +112,19 @@ def process_message(msgobj):
         update_players(msgobj['DATA'])
     elif msgobj['TYPE'] == 'gamestat':
         update_game_status(msgobj['DATA'])
+    elif msgobj['TYPE'] == 'actiontime':
+        # TODO: animate the countdown timer
+        pass
+        #gameboard.add_system_msg(f'Countdown to roll started: {msgobj["DATA"]}')
+    elif msgobj['TYPE'] == 'roll':
+        gameboard.display_die_roll(msgobj['DATA'])
+    elif msgobj['TYPE'] == 'market':
+        d = msgobj['DATA']
+        gameboard.update_stock_price(d['stock'], d['newprice'], d['div'])
+    elif msgobj['TYPE'] == 'split':
+        gameboard.display_split_message(msgobj['DATA'])
+    elif msgobj['TYPE'] == 'offmarket':
+        gameboard.display_bust_message(msgobj['DATA'])
     elif msgobj['TYPE'] == 'initplayer':
         update_player(msgobj['DATA'])
     elif msgobj['TYPE'] == 'start':
@@ -105,7 +133,7 @@ def process_message(msgobj):
         gameboard.add_system_msg(str(msgobj['DATA']))
         # TODO set any flags here to allow gameplay
     else:
-        raise ValueError(f"unknown message type received: [{msgobj['TYPE']}]")
+        raise ValueError(f"unknown message type received: [{msgobj['TYPE']}] data:{msgobj['DATA']}")
 
 # globals TODO: is there a better way?
 running = True

@@ -37,6 +37,7 @@ import random # for die rolls
 import json
 import struct # for predictable integer (message size) encoding to bytes
 import datetime
+import time
 import uuid
 import types # SimpleNamespace for stock enum-ish construct?
 from st_common import MessageReceiver
@@ -61,7 +62,8 @@ class Player:
         self.conn = conn
         self.message_receiver = MessageReceiver(f'msgrec-{name}', conn, process_message)
         self.message_receiver.data = name
-        self.portfolio = [ 0 for i in range(len(stock_names)) ]
+        self.portfolio = list( 0 for i in range(len(stock_names)) )
+        # NOPE self.pending_order = [ 0 for i in range(len(stock_names)) ]
         self.id = uuid.uuid4()
         self.cash = Player.INIT_CASH
         self.game = None # reference to StockTickerGame
@@ -93,6 +95,36 @@ class Player:
             'portfolio': self.portfolio
         }
 
+class DiceRollTimer(threading.Thread):
+    def __init__(self, interval, fn_action):
+        super().__init__()
+        self.interval = interval
+        self.action = fn_action
+        self.daemon = True
+        self.paused = False
+        self.restart_event = threading.Event()
+
+    def run(self):
+        while True:
+            print (f"Timer countdown started! {self.interval} seconds")
+            send_all(bmsg('actiontime', self.interval))
+            time.sleep(self.interval)
+            if self.paused:
+                self.restart_event.clear()
+                self.restart_event.wait()
+                # NOTE: if paused, assume when unpaused that all players want die roll immediately
+                self.paused = False
+            self.action()
+
+    def pause(self):
+        self.paused = True
+
+    def restart(self):
+        if self.paused:
+            self.paused = False
+        if not self.restart_event.is_set():
+            self.restart_event.set()
+
 class StockTickerGame():
     '''
     Encapsulates an entire session of Stock Ticker including the market
@@ -108,14 +140,18 @@ class StockTickerGame():
         self.ACTION_DIE = ('UP', 'DOWN', 'DIV')
         self.AMOUNT_DIE = (5, 10, 20)
 
-        self.stock_names = stocknames
+        self.option_ignore_nopay_divrolls = True
+        self.option_timer_seconds = 4
+
+        #self.stock_names = stock_names hmm not needed
         self.market = [ self.INIT_VAL for i in range(len(stock_names)) ]
         self.players = dict()
         self.started = False # flag indicating if game underway or not
 
-        self.buysell_call_id = None # id of the last buysell_call sent out to players
-
-        self.option_ignore_nopay_divrolls = True
+        #self.roll_timer = threading.Timer(self.option_timer_seconds, self.market_action)
+        self.roll_timer = DiceRollTimer(self.option_timer_seconds, self.market_action)
+        self.market_lock = threading.Lock()
+        # REMOVE # self.buysell_call_id = None # id of the last buysell_call sent out to players
 
     def add_player(self, player):
         if player.name in (p.name for p in self.players.values()):
@@ -140,6 +176,125 @@ class StockTickerGame():
 
     def start_game(self):
         self.started = True
+        self.roll_timer.start()
+
+    def die_roll(self):
+        retval = {
+            'stock': random.choice(self.STOCK_DIE),
+            'action': random.choice(self.ACTION_DIE),
+            'amount': random.choice(self.AMOUNT_DIE),
+            'div_nopay': False # only true if action is div but stock too low to pay
+        }
+        # result will say if dividend will be paid so that caller can decide to ignore it if not
+        if retval['action'] == 'DIV':
+            retval['div_nopay'] = not self.pays_dividend(retval['stock'])
+        return retval
+
+    def process_order(self, player, buysell_order):
+        ''' Apply the buy/sell order '''
+        total_cents_spent = 0
+        with self.market_lock:
+            new_shares_totals = player.portfolio.copy()
+            for i, shares in enumerate(buysell_order['shares']):
+                total_dollars_spent += shares * self.market[i]
+                new_shares_totals[i] -= shares
+            bln_enough_cash = total_dollars_spent <= player.cash
+            bln_enough_shares = all((s>=0 for s in new_shares_totals)) 
+            if bln_enough_cash and bln_enough_shares:
+                player.cash += int(total_cents_spent / 100)
+                player.portfolio = new_shares_totals
+                bln_approved = True
+            else:
+                bln_approved = True
+        approve_data = {
+            'reqid': buysell_call['reqid'],
+            'approve': bln_approved
+        }
+        player.conn.send(bmsg('approve', approve_data))
+        
+    # NOTE: this should be called with the market_lock acquired
+    # TODO: can/should we move the message sending outside the locked area?
+    def _split(self, i_stock):
+        for player in self.players.values():
+            # dividend 20 paid out
+            div_dollars = int(player.portfolio[i_stock] * 0.2)
+            player.cash += div_dollars
+            shares_gained = player.portfolio[i_stock]
+            player.portfolio[i_stock] += shares_gained
+            split_msg_data = {
+                'stock': i_stock,
+                'newprice': self.INIT_VAL,
+                'div': self.INIT_VAL >= self.DIV_VAL, 
+                'shares': player.portfolio[i_stock],
+                'gained': shares_gained,
+                'divpaid': div_dollars
+            }
+            player.conn.send(bmsg('split', split_msg_data))
+        self.market[i_stock] = self.INIT_VAL
+        
+    def _bust(self, i_stock):
+        for player in self.players.values():
+            shares_lost = player.portfolio[i_stock]
+            player.portfolio[i_stock] = 0
+            bust_msg_data = {
+                'stock': i_stock,
+                'newprice': self.INIT_VAL,
+                'shares': 0,
+                'lost': shares_lost
+            }
+            player.conn.send(bmsg('offmarket', bust_msg_data))
+        self.market[i_stock] = self.INIT_VAL
+
+    def market_action(self):
+        '''Rolls dice and applies changes to the game'''
+        # roll the dice
+        roll = self.die_roll()
+        attempts = 1
+        max_attempts = 100
+        if self.option_ignore_nopay_divrolls:
+            while roll['div_nopay'] and attempts < max_attempts:
+                if attempts == max_attempts:
+                    raise RuntimeError(f"Too many no-pay dividend die rolls")
+                attempts += 1
+                roll = self.die_roll()
+        print (f'{roll=}')
+        
+        send_all(bmsg('roll', roll))
+        price_change_data = None
+        with self.market_lock:
+            if roll['action'] == 'UP':
+                self.market[roll['stock']] += roll['amount']
+                if self.market[roll['stock']] >= self.SPLIT_VAL:
+                    self._split(roll['stock'])
+                price_change_data = {'stock': roll['stock'],
+                        'amount': roll['amount'],
+                        'newprice': self.market[roll['stock']],
+                        'div': self.pays_dividend(roll['stock'])
+                    }
+            if roll['action'] == 'DOWN':
+                self.market[roll['stock']] -= roll['amount']
+                if self.market[roll['stock']] <= self.OFF_MARKET_VAL:
+                    self._bust(roll['stock'])
+                price_change_data = {'stock': roll['stock'],
+                        'amount': -roll['amount'],
+                        'newprice': self.market[roll['stock']],
+                        'div': self.pays_dividend(roll['stock'])
+                    }
+            if roll['action'] == 'DIV' and self.pays_dividend(roll['stock']):
+                for player in self.players.values():
+                    # dividend 20 paid out
+                    div_dollars = int(player.portfolio[roll['stock']] * 0.2)
+                    if div_dollars:
+                        player.cash += div_dollars
+                        div_msg_data = {
+                            'stock': roll['stock'],
+                            'amount': roll['amount'],
+                            'divpaid': div_dollars
+                        }
+                        player.conn.send(bmsg('div', div_msg_data))
+        if price_change_data:
+            send_all(bmsg('market', price_change_data))
+                
 
     def pays_dividend(self, i_stock):
         return self.market[i_stock] >= self.DIV_VAL
@@ -190,19 +345,15 @@ def process_message(message, playername):
             game.start_game()
             send_all(bmsg('start', None))
             send_all(bmsg('gamestat', game.status()))
+    elif message['TYPE'] == 'buysell':
+        game.process_order(message['DATA'])
+    else:
+        # ERROR
+        player.conn.send(bmsg('error', f'Unrecognized message type: {message["DATA"]}'))
+        print (f"Got bad message type {message['TYPE']} from {player.name}")
     
-def die_roll(game):
-    retval = {
-        'stock': random.choice(game.STOCK_DIE),
-        'action': random.choice(game.ACTION_DIE),
-        'amount': random.choice(game.AMOUNT_DIE),
-        'div_nopay': False # only true if action is div but stock too low to pay
-    }
-    # result will say if dividend will be paid so that caller can decide to ignore it if not
-    if retval['action'] == 'DIV':
-        retval['div_nopay'] = not game.pays_dividend(retval['stock'])
-    return retval
 
+# TODO: delete this, not going to be used
 def buysell_call(game):
     '''
     Send a message to clients to put in their buysell orders because a market action is
@@ -213,20 +364,6 @@ def buysell_call(game):
     call_id = uuid.uuid4()
     game.buysell_call_id = call_id
     send_all(bmsg('buysell', {'reqid': call_id}))
-
-def market_action(game):
-    # roll the dice
-    roll = die_roll(game)
-    attempts = 1
-    max_attempts = 100
-    if not game.option_ignore_nopay_divrolls:
-        while roll['div_nopay'] and attempts < max_attempts:
-            if attempts == max_attempts:
-                raise RuntimeError(f"Too many no-pay dividend die rolls")
-            attempts += 1
-            roll = die_roll(game)
-
-    print (f'ROLL: {stock=} {action=} {amount=}')
 
 def disconnect_client(player):
     print (f'disconnect_client called for {player.name}')
