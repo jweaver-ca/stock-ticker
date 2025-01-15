@@ -113,7 +113,7 @@ def process_message(msgobj):
     mdata = msgobj['DATA']
     if mtype == 'chatmsg':
         #globalscr.addstr(mdata + '\n')
-        gameboard.add_system_msg(mdata)
+        gameboard.add_chat_msg(mdata)
     elif mtype == 'error':
         gameboard.add_system_msg(f'ERROR FROM SERVER: {msgobj["DATA"]}\n')
         running = False
@@ -165,9 +165,13 @@ def process_message(msgobj):
         gameboard.display_split_message(mdata)
     elif mtype == 'offmarket':
         # eg: stock: #, newprice: #, shares: 0, lost: 200
+        # affects: 1-market/div, 1-owned, networth, sysmsg
         player.portfolio[mdata['stock']] = mdata['shares']
+        gameboard.update_player_owned(mdata['stock'], player.portfolio[mdata['stock']])
         market[mdata['stock']] = mdata['newprice']
         gameboard.update_stock_price(mdata['stock'], mdata['newprice'], mdata['div'])
+        networth = player.networth(market)
+        gameboard.update_player_cash(player.cash, networth)
         gameboard.display_bust_message(mdata)
     elif mtype == 'player':
         update_player(mdata)
@@ -256,7 +260,8 @@ def update_player(player_status, market=None):
 #try:
 def main(stdscr):
     curses.curs_set(0)
-    
+    curses.start_color()
+
     global gameboard
     global player
     global market
@@ -285,13 +290,10 @@ def main(stdscr):
     # MessageReceiver is duplicate of that found in chat_server_v3.py, so just give name 'server'
     # msgrec is attached to selector and will simply process messages from the server
     msgrec = MessageReceiver('server', clientsocket, process_message)
-    #clientsocket.send(bytes(args.name, 'UTF-8'))
     clientsocket.send(bmsg('initconn',args.name))
 
     sel = selectors.DefaultSelector()
-    #sel.register(clientsocket, selectors.EVENT_READ | selectors.EVENT_WRITE, None)
     sel.register(clientsocket, selectors.EVENT_READ, None)
-
 
     # TODO: At this point, GameBoard's thread has started (on __init__) but this main thread has no way to react
     #     to keypresses in the GameBoard because this thread gets tied up below with select() calls
@@ -316,12 +318,7 @@ def main(stdscr):
     #     this through UI, but it can't be perfect.  SO WHICH WAY ADDRESSES THIS ISSUE BEST?
 
     # NOTE: main thread runs the selector loop
-    # NOTE: KeyboardThread runs the curses input loop
 
-    #kt = KeyboardThread(args.name, stdscr, clientsocket)
-    #kt.start()
-    # TODO: this is bad OOP... adding kt to msgrec...
-    # msgrec.kt = kt
     while running:
         # select() seems to be interruptable by KeyboardInterrupt
         try:
@@ -343,13 +340,6 @@ def main(stdscr):
             running = False
             print(traceback.format_exc())
     print ('end main: ' + str(datetime.datetime.now()))
-#clientsocket.close() # TODO: is it harmless to close again? check what purpose does it serve?
-#finally:
-#print ('finally: ' + str(datetime.datetime.now()))
-#   stdscr.keypad(False)
-#   curses.nocbreak()
-#   curses.echo()
-#   curses.endwin()
 
 if __name__ == '__main__':
     curses.wrapper(main)

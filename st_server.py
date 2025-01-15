@@ -354,7 +354,10 @@ def process_message(message, playername):
     if message['TYPE'] == 'msg':
         # incoming chat message
         chat_msg = message['DATA']
-        send_all(bmsg('chatmsg', f'[{datetime.datetime.now()}] {playername}: {chat_msg}'))
+        #send_all(bmsg('chatmsg', f'[{datetime.datetime.now()}] {playername}: {chat_msg}'))
+        send_all(bmsg('chatmsg', {'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    'playername': playername,
+                    'message': chat_msg}))
     elif message['TYPE'] == 'exit':
         print (f'exit message recieved from {playername}')
         disconnect_client(player)
