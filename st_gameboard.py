@@ -609,7 +609,11 @@ class GameBoard(object):
         return self.coords[name]
 
     def update_field(self, name, newval, attr=0, bln_refresh=True):
-        self.fields[name].update(self.scr, newval, attr, bln_refresh)
+        # Field.update returns the curses.addstr args so GameBoard can draw
+        addstr_args = self.fields[name].update(newval, attr, bln_refresh)
+        with self.drawlock:
+            self.scr.addstr(*addstr_args)
+            self.scr.refresh()
 
     def activate_button_group(self, name):
         if self.active_buttongroup:
@@ -629,13 +633,14 @@ class GameBoard(object):
         a new Button becomes active/inactive.
         '''
         btngrp = self.buttongroups[name]
-        for name, btn in btngrp.buttons.items():
-            if btngrp.active_button.name == name and btngrp.is_active:
-                # TODO draw as active, reverse video of its label
-                self.scr.addstr(btn.y, btn.x, btn.label, curses.A_REVERSE)
-            else:
-                self.scr.addstr(btn.y, btn.x, btn.label)
-        self.scr.refresh()
+        with self.drawlock:
+            for name, btn in btngrp.buttons.items():
+                if btngrp.active_button.name == name and btngrp.is_active:
+                    # TODO draw as active, reverse video of its label
+                    self.scr.addstr(btn.y, btn.x, btn.label, curses.A_REVERSE)
+                else:
+                    self.scr.addstr(btn.y, btn.x, btn.label)
+            self.scr.refresh()
 
     def read_str(curses_win):
         # NOTE: this is a static method
@@ -1016,17 +1021,15 @@ class Field(object):
         self.justify = justify
         self.fn_curses_attr = None
 
-    def update(self, scr, newval, attr=0, bln_refresh=True):
+    # TODO: should not draw, should return the addstr args to GameBoard
+    def update(self, newval, attr=0, bln_refresh=True):
         str_newval = str(newval)
         if len(str_newval) > self.length:
             raise ValueError(f"newval [{newval}] too long for this Field")
         str_fullval = f"{str_newval:{self.justify}{self.length}s}"
         if self.fn_curses_attr:
             attr = self.fn_curses_attr(newval)
-        # TODO; remove this todo when we know attr being None works
-        scr.addstr(self.y, self.x, str_fullval, attr)
-        if bln_refresh:
-            scr.refresh()
+        return (self.y, self.x, str_fullval, attr)
 
     def set_curses_attr_rules(self, fn_rules):
         self.fn_curses_attr = fn_rules

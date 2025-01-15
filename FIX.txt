@@ -1,3 +1,0 @@
-- reverse sign on pending, add color green/red
-- enable blocksz buttons
-

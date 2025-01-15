@@ -17,7 +17,7 @@ C       reconn      Reconnect request               {name: XX, id: XX}
 C       msg         Cli chat message                string with chat message contents
 C       exit        Alert client exit               n/a
  S      conn-accept Server accepted                 {id: XX}
- S      chatmsg     Chat Message                    string with chat message contents (incl. cli info)
+ S      chatmsg     Chat Message                    {time: isoformat.utc, playername: str, message: str}
  S      error       Server couldnt process msg      error details
  S      disconnect  A client has disc.              Client name
  S      server-exit Server exiting

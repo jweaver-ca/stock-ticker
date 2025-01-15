@@ -10,22 +10,8 @@
 '''
 # (useless comment from andrea)
 #
-# from: https://stackoverflow.com/questions/7749341/basic-python-client-socket-example
-# modified for python3
-
-# v2 add selectors
-# V3:
-# - add message ojbects
-# - allow server to send shutdown requests to clients
-# - handle client disconnect by server
-
 # TODO: .bind localhost <-- need to change for actual network comms to work?
 # TODO: handle mutliple rooms, for now just one room for all
-# TODO: handle when buf > 1024 chars so its a single message
-# TODO: handle removing clients when they disconnect
-# TODO: handle a duplicate name trying to join
-# TODO: ensure easy way to exit
-# TODO: exit properly on error
 
 import socket
 #import threading
@@ -33,7 +19,6 @@ import selectors
 import threading
 import traceback
 import random # for die rolls
-#import pickle # for encoding messages to bytes -- whoops, use json instead
 import json
 import struct # for predictable integer (message size) encoding to bytes
 import datetime
@@ -41,6 +26,26 @@ import time
 import uuid
 import types # SimpleNamespace for stock enum-ish construct?
 from st_common import MessageReceiver
+
+# ------------------------------------------------------------------------------
+#                              SYNCHRONIZATION NOTES
+# ------------------------------------------------------------------------------
+# Not much syncing required in the server program.  Each players connection runs
+# in its own thread (selector) but a player's actions cannot directly affect any
+# game data that is shared by other players.
+# 
+# A few game actions affect Player attributes (cash (dividend), holdings
+# (split,bust) so these actions should be synchronized against Player actions that
+# also affect these attributes
+
+# Any buy/sell request from a player depends on stock prices. Market ticks affect
+# that so although it's unlikely (e.g. a stock price changes from a market tick
+# after a check to see if a player can afford a purchase, so a purchase could get
+# made in error resulting in negative cash, etc), all this must be synchronized
+# 
+# It needs to be guaranteed that no game action initiated by the server can be
+# started before the previous game action is complete.  A DiceRollTimer tick does
+# not run its action on a separate thread so this happens naturally.
 
 stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
 stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
@@ -52,7 +57,7 @@ serversocket.bind(('localhost', 8089))
 serversocket.listen(5) # become a server socket, maximum 5 connections
 #serversocket.settimeout(5) # .accept() blocks and ctrl-c doesn't break out of it.  this allows us to quit easier, but requires us to handle the except during accept
 
-lock = threading.Lock()
+lock = threading.Lock() # TODO: remove this, each game should have its own
 
 class Player:
     INIT_CASH = 5000
@@ -97,16 +102,31 @@ class Player:
 
 class DiceRollTimer(threading.Thread):
     def __init__(self, interval, fn_action):
+        '''
+        Market actions in a game should generall run every <interval> seconds.
+        When DiceRollTime is first started, it will pause for interval seconds
+        and then execute <fn_action()>. This sequence loops forever in its own
+        thread.
+
+        If a DiceRollTimer is <pause()>d, action will *not* be executed at
+        the end of a countdown, instead it will halt and wait until its <restart()>ed.
+        When restarted, the action will fire immediately, then the timer loop will
+        continue.
+
+        If DiceRollTimer is paused and restarted again before the end of the first
+        paused countdown, it will be like nothing happened the action will fire
+        at the same time as if it was never paused at all.
+        '''
         super().__init__()
         self.interval = interval
         self.action = fn_action
-        self.daemon = True
+        self.daemon = True # just die when main thread exits
         self.paused = False
         self.restart_event = threading.Event()
 
     def run(self):
         while True:
-            print (f"Timer countdown started! {self.interval} seconds")
+            # TODO Timer shouldn't have direct access to send_all. Add a server call. (works fine, just violates concepts)
             send_all(bmsg('actiontime', self.interval))
             time.sleep(self.interval)
             if self.paused:
@@ -124,6 +144,9 @@ class DiceRollTimer(threading.Thread):
             self.paused = False
         if not self.restart_event.is_set():
             self.restart_event.set()
+
+    def set_interval(self, seconds):
+        self.interval = seconds
 
 class StockTickerGame():
     '''
@@ -150,7 +173,7 @@ class StockTickerGame():
 
         #self.roll_timer = threading.Timer(self.option_timer_seconds, self.market_action)
         self.roll_timer = DiceRollTimer(self.option_timer_seconds, self.market_action)
-        self.market_lock = threading.Lock()
+        self.game_lock = threading.Lock()
         # REMOVE # self.buysell_call_id = None # id of the last buysell_call sent out to players
 
     def add_player(self, player):
@@ -172,6 +195,10 @@ class StockTickerGame():
         return [(val, val>self.DIV_VAL) for val in self.market]
 
     def all_players_ready(self):
+        ''' 
+        As players indicate they are ready, this can be checked to see if
+        the game should begin.
+        '''
         return all([p.ready_start for p in self.players.values()])
 
     def start_game(self):
@@ -179,6 +206,8 @@ class StockTickerGame():
         self.roll_timer.start()
 
     def die_roll(self):
+        ''' Produces a die and returns the result, including a flag to inicate
+            if a useless dividend was rolled. Does not act on roll result. '''
         retval = {
             'stock': random.choice(self.STOCK_DIE),
             'action': random.choice(self.ACTION_DIE),
@@ -198,14 +227,13 @@ class StockTickerGame():
             'prices': [],
             'reject-reason': None
         }
-        with self.market_lock:
+        with self.game_lock:
             new_shares_totals = player.portfolio.copy()
             for i, (shares, expected_price) in enumerate(buysell_order['data']):
                 approve_data['prices'].append(self.market[i])
                 total_cents_spent += shares * self.market[i]
                 new_shares_totals[i] += shares
             total_dollars_spent = int(total_cents_spent / 100)
-            print (f'{total_dollars_spent=} {new_shares_totals=}')
             bln_enough_cash = total_dollars_spent <= player.cash
             bln_enough_shares = all((s>=0 for s in new_shares_totals)) 
             if bln_enough_cash and bln_enough_shares:
@@ -227,12 +255,21 @@ class StockTickerGame():
                 bln_approved = False
             approve_data['approved'] = bln_approved
             approve_data['cash'] = player.cash
-            approve_data['portfolio'] = player.portfolio
+            approve_data['portfolio'] = tuple(player.portfolio) # tuple() = thread safe
         player.conn.send(bmsg('approve', approve_data))
         
-    # NOTE: this should be called with the market_lock acquired
-    # TODO: can/should we move the message sending outside the locked area?
     def _split(self, i_stock):
+        '''
+        Stock prices reached max. Process dividend, reset price, adjust affected player
+        portfolios, return messages.
+
+        Must be called with the game_lock on.
+        '''
+        if not self.game_lock.locked():
+            # NOTE: *could* use re-entrant lock but prefer to avoid
+            raise RuntimeError("Unsynchronized call")
+
+        player_msgs = []
         for player in self.players.values():
             # dividend 20 paid out
             div_dollars = int(player.portfolio[i_stock] * 0.2)
@@ -248,10 +285,21 @@ class StockTickerGame():
                 'divpaid': div_dollars,
                 'playercash': player.cash
             }
-            player.conn.send(bmsg('split', split_msg_data))
+            player_msgs.append((player, bmsg('split', split_msg_data)))
         self.market[i_stock] = self.INIT_VAL
+        return player_msgs
         
     def _bust(self, i_stock):
+        '''
+        Stock prices reached zero. Reset price, adjust affected player
+        portfolios, return generated messages.
+
+        Must be called with the game_lock on.
+        '''
+        if not self.game_lock.locked():
+            raise RuntimeError("Unsynchronized call")
+
+        player_msgs = []
         for player in self.players.values():
             shares_lost = player.portfolio[i_stock]
             player.portfolio[i_stock] = 0
@@ -262,11 +310,12 @@ class StockTickerGame():
                 'shares': 0,
                 'lost': shares_lost
             }
-            player.conn.send(bmsg('offmarket', bust_msg_data))
+            player_msgs.append((player, bmsg('offmarket', bust_msg_data)))
         self.market[i_stock] = self.INIT_VAL
+        return player_msgs
 
     def market_action(self):
-        '''Rolls dice and applies changes to the game'''
+        '''Rolls dice and applies changes to the game (DiceRollTimer's action)'''
         # roll the dice
         roll = self.die_roll()
         attempts = 1
@@ -277,15 +326,18 @@ class StockTickerGame():
                     raise RuntimeError(f"Too many no-pay dividend die rolls")
                 attempts += 1
                 roll = self.die_roll()
-        print (f'{roll=}')
         
         send_all(bmsg('roll', roll))
         price_change_data = None
-        with self.market_lock:
+        player_msgs = [] # send after lock released
+        # TODO, as is will produce deadlock since split_, bust_ open their own
+        #   calls into question whether 
+        with self.game_lock: # TODO: confirm this is *NOT* necessary and remove
             if roll['action'] == 'UP':
                 self.market[roll['stock']] += roll['amount']
                 if self.market[roll['stock']] >= self.SPLIT_VAL:
-                    self._split(roll['stock'])
+                    split_msgs = self._split(roll['stock'])
+                    player_msgs.extend(split_msgs)
                 price_change_data = {'stock': roll['stock'],
                         'amount': roll['amount'],
                         'newprice': self.market[roll['stock']],
@@ -294,7 +346,8 @@ class StockTickerGame():
             if roll['action'] == 'DOWN':
                 self.market[roll['stock']] -= roll['amount']
                 if self.market[roll['stock']] <= self.OFF_MARKET_VAL:
-                    self._bust(roll['stock'])
+                    bust_msgs = self._bust(roll['stock'])
+                    player_msgs.extend(bust_msgs)
                 price_change_data = {'stock': roll['stock'],
                         'amount': -roll['amount'],
                         'newprice': self.market[roll['stock']],
@@ -312,10 +365,12 @@ class StockTickerGame():
                             'divpaid': div_dollars,
                             'playercash': player.cash
                         }
-                        player.conn.send(bmsg('div', div_msg_data))
+                        player_msgs.append((player, bmsg('div', div_msg_data)))
+            # end lock
         if price_change_data:
             send_all(bmsg('markettick', price_change_data))
-                
+        for (p, m) in player_msgs:
+            p.conn.send(m)
 
     def pays_dividend(self, i_stock):
         return self.market[i_stock] >= self.DIV_VAL
@@ -377,11 +432,12 @@ def process_message(message, playername):
         print (f"Got bad message type {message['TYPE']} from {player.name}")
     
 
-# TODO: delete this, not going to be used
+# NOTE: not used in the current version of the game. Could be a future option
 def buysell_call(game):
     '''
     Send a message to clients to put in their buysell orders because a market action is
     about to take place
+    UNUSED - this might be part of a game option in the future
     '''
     if game.buysell_call_id:
         raise RuntimeError("buysell_call issued with one already active")
