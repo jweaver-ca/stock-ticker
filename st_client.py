@@ -57,6 +57,34 @@ class Player:
         self.portfolio = [ 0 for i in range(len(stock_names)) ]
         self.cash = 0
         self.initialized = False # server needs to send info before use
+        self.ready_start = False
+
+    def networth(self, market_prices=None):
+        # market MUST be included if any holdings
+        if any(s>0 for s in self.portfolio) and market_prices is None:
+            raise RuntimeError("networth cannot be calculated without market")
+        if market_prices is None:
+            return self.cash
+        else:
+            holdings = 0
+            for i, price in enumerate(market_prices):
+                holdings += int(self.portfolio[i] * price / 100)
+            return self.cash + holdings
+
+class StockMarket:
+    def __init__(self):
+        self.prices = None
+        self.initialized = False # server needs to send info before use
+
+    def shareprice(self, i_stock):
+        if not self.initialized:
+            raise RuntimeError(f"StockMarket not initialized")
+        return self.prices[i_stock]
+
+class ClientGame:
+    def __init__(self, player, market):
+        self.player = player
+        self.market = market
 
 # simple message object/dictionary
 # TODO: rename msg because it shares name with message type 'msg' / confusing
@@ -70,36 +98,95 @@ def bmsg(strType, strData):
     sz = len(msgbytes)
     return struct.pack('I', sz) + msgbytes
 
+def dbg_check_sync():
+    # check gameboard data points vs. client data points
+    pass
+
 # called by client once completed message received from server
+# TODO: any operation here that modifies shared data between
+#       gameboard and the client must be synchronized
 def process_message(msgobj):
     global running
     global gameboard
     #msgobj = oClient.message
-    if msgobj['TYPE'] == 'chatmsg':
-        #globalscr.addstr(msgobj['DATA'] + '\n')
-        gameboard.add_system_msg(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'error':
+    mtype = msgobj['TYPE']
+    mdata = msgobj['DATA']
+    if mtype == 'chatmsg':
+        #globalscr.addstr(mdata + '\n')
+        gameboard.add_chat_msg(mdata)
+    elif mtype == 'error':
         gameboard.add_system_msg(f'ERROR FROM SERVER: {msgobj["DATA"]}\n')
         running = False
-    elif msgobj['TYPE'] == 'conn-accept':
+    elif mtype == 'conn-accept':
         gameboard.add_system_msg("** connection to server accepted **\n")
-    elif msgobj['TYPE'] == 'disconnect':
+    elif mtype == 'disconnect':
         gameboard.add_system_msg(f'[{msgobj["DATA"]} has disconnected]\n')
-    elif msgobj['TYPE'] == 'joined':
+    elif mtype == 'joined':
         gameboard.add_system_msg(f'[{msgobj["DATA"]} has joined]\n')
-    elif msgobj['TYPE'] == 'server-exit':
+    elif mtype == 'server-exit':
         gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]\n')
         running = False
-    elif msgobj['TYPE'] == 'initmkt':
-        update_market(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'playerlist':
-        update_players(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'gamestat':
-        update_game_status(msgobj['DATA'])
-    elif msgobj['TYPE'] == 'initplayer':
-        update_player(msgobj['DATA'])
+    elif mtype == 'initmkt':
+        # eg. ((100, False), (175, True), etc)
+        for i, (stockval, bln_div) in enumerate(mdata):
+            gameboard.update_stock_price(i, stockval, bln_div)
+            market[i] = stockval
+    elif mtype == 'playerlist':
+        # e.g. ('Fred', 'Joe',....)
+        # NOTE: I dont see a need for client program to track these
+        other_player_list = [ name for name in mdata if name != args.name ]
+        gameboard.update_players(args.name, other_player_list)
+    elif mtype == 'gamestat':
+        # eg: {'started': True}
+        update_game_status(mdata)
+    elif mtype == 'actiontime':
+        # TODO: animate the countdown timer
+        pass
+        #gameboard.add_system_msg(f'Countdown to roll started: {msgobj["DATA"]}')
+    elif mtype == 'roll':
+        gameboard.display_die_roll(mdata)
+    elif mtype == 'markettick':
+        #  eg {stock: 0, amount: -5, newprice: 100, div: True)
+        market[mdata['stock']] = mdata['newprice']
+        gameboard.update_stock_price(mdata['stock'], mdata['newprice'], mdata['div'])
+    elif mtype == 'approve':
+        # eg {reqid: ???, approved: bln, prices: 6 actual_prices, cost: n, cash: n, portfolio: [n,n], reject-reason: str}
+        if mdata['approved']:
+            update_player({'cash': mdata['cash'], 'portfolio': mdata['portfolio']}, market)
+        gameboard.buysell_approval(mdata)
+    elif mtype == 'split':
+        # {stock: 0-5, newprice: #, div: bln, shares: (new_total), divpaid: dollars}
+        player.cash = mdata['playercash'] 
+        networth = player.networth(market)
+        player.portfolio[mdata['stock']] = mdata['shares']
+        gameboard.update_player_cash(player.cash, networth)
+        gameboard.update_player_owned(mdata['stock'], mdata['shares'])
+        gameboard.update_stock_price(mdata['stock'], mdata['newprice'], mdata['div'])
+        gameboard.display_split_message(mdata)
+    elif mtype == 'offmarket':
+        # eg: stock: #, newprice: #, shares: 0, lost: 200
+        # affects: 1-market/div, 1-owned, networth, sysmsg
+        player.portfolio[mdata['stock']] = mdata['shares']
+        gameboard.update_player_owned(mdata['stock'], player.portfolio[mdata['stock']])
+        market[mdata['stock']] = mdata['newprice']
+        gameboard.update_stock_price(mdata['stock'], mdata['newprice'], mdata['div'])
+        networth = player.networth(market)
+        gameboard.update_player_cash(player.cash, networth)
+        gameboard.display_bust_message(mdata)
+    elif mtype == 'player':
+        update_player(mdata)
+    elif mtype == 'start':
+        gameboard.add_system_msg('All players ready. Game has started!')
+    elif mtype == 'servermsg':
+        gameboard.add_system_msg(str(mdata))
+    elif mtype == 'div':
+        player.cash = mdata['playercash']
+        gameboard.update_player_cash(mdata['playercash'],player.networth(market))
+        gameboard.report_div(mdata['stock'], mdata['divpaid'])
+
+        # TODO set any flags here to allow gameplay
     else:
-        raise ValueError(f"unknown message type received: [{msgobj['TYPE']}]")
+        raise ValueError(f"unknown message type received: [{mtype}] data:{mdata}")
 
 # globals TODO: is there a better way?
 running = True
@@ -127,10 +214,21 @@ def process_gameboard_ops(gameboard):
         op = gameboard.get_operation(block=True, timeout=2) # blocking
         if op is None:
             continue # timeout reached
-        if op['TYPE'] == 'chat-message':
+        otype = op['TYPE']
+        odata = op['DATA']
+        if otype == 'chat-message':
             send_chat_message(op['DATA'])
-        elif op['TYPE'] == 'quit':
+        elif otype == 'quit':
             process_quit()
+        elif otype == 'ready-start':
+            if not player.ready_start:
+                clientsocket.send(bmsg('start', odata))
+                player.ready_start = True
+            else:
+                gameboard.dbg('game start requested again')
+        elif otype == 'buysell':
+            # TODO: game status must be checked
+            clientsocket.send(bmsg('buysell', odata))
         else:
             gameboard.add_system_msg('ERROR: bad game operation type: {op["TYPE"]}')
 
@@ -140,15 +238,6 @@ def send_chat_message(str_message):
 def process_quit():
     clientsocket.send(bmsg('exit', None))
     running = False
-
-def update_market(market_summary):
-    for i, (stockval, bln_div) in enumerate(market_summary):
-        gameboard.update_stock_price(i, stockval, bln_div)
-        market = market_summary
-
-def update_players(playerlist):
-    other_player_list = [ name for name in playerlist if name != args.name ]
-    gameboard.update_players(args.name, other_player_list)
 
 def update_game_status(game_status):
     # NOTE: I think it makes sense for this to be a simple string from client to gameboard
@@ -160,17 +249,19 @@ def update_game_status(game_status):
         str_status += ' Waiting for game start'
     gameboard.update_status(str_status)
 
-def update_player(player_status):
-    gameboard.update_player(player_status)
+def update_player(player_status, market=None):
     player.cash = player_status['cash']
     player.portfolio = player_status['portfolio']
+    player_status['networth'] = player.networth(market)
+    gameboard.update_player(player_status['cash'], player_status['networth'], player_status['portfolio'])
     player.initialized = True # set flag that player object is ready to use 
     # NOTE: networth is basically useless here? it's just for diplay IMO
     
 #try:
 def main(stdscr):
     curses.curs_set(0)
-    
+    curses.start_color()
+
     global gameboard
     global player
     global market
@@ -185,7 +276,7 @@ def main(stdscr):
     gameboard_thread.start()
 
     player = Player(args.name)
-    market = None
+    market = [ -1 for x in stock_names ]
 
     # --------------------------------------------------------
     # Attempt connecton to game server
@@ -199,13 +290,10 @@ def main(stdscr):
     # MessageReceiver is duplicate of that found in chat_server_v3.py, so just give name 'server'
     # msgrec is attached to selector and will simply process messages from the server
     msgrec = MessageReceiver('server', clientsocket, process_message)
-    #clientsocket.send(bytes(args.name, 'UTF-8'))
     clientsocket.send(bmsg('initconn',args.name))
 
     sel = selectors.DefaultSelector()
-    #sel.register(clientsocket, selectors.EVENT_READ | selectors.EVENT_WRITE, None)
     sel.register(clientsocket, selectors.EVENT_READ, None)
-
 
     # TODO: At this point, GameBoard's thread has started (on __init__) but this main thread has no way to react
     #     to keypresses in the GameBoard because this thread gets tied up below with select() calls
@@ -230,12 +318,7 @@ def main(stdscr):
     #     this through UI, but it can't be perfect.  SO WHICH WAY ADDRESSES THIS ISSUE BEST?
 
     # NOTE: main thread runs the selector loop
-    # NOTE: KeyboardThread runs the curses input loop
 
-    #kt = KeyboardThread(args.name, stdscr, clientsocket)
-    #kt.start()
-    # TODO: this is bad OOP... adding kt to msgrec...
-    # msgrec.kt = kt
     while running:
         # select() seems to be interruptable by KeyboardInterrupt
         try:
@@ -257,13 +340,6 @@ def main(stdscr):
             running = False
             print(traceback.format_exc())
     print ('end main: ' + str(datetime.datetime.now()))
-#clientsocket.close() # TODO: is it harmless to close again? check what purpose does it serve?
-#finally:
-#print ('finally: ' + str(datetime.datetime.now()))
-#   stdscr.keypad(False)
-#   curses.nocbreak()
-#   curses.echo()
-#   curses.endwin()
 
 if __name__ == '__main__':
     curses.wrapper(main)

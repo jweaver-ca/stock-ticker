@@ -32,10 +32,12 @@ import socket
 import selectors
 import threading
 import traceback
+import random # for die rolls
 #import pickle # for encoding messages to bytes -- whoops, use json instead
 import json
 import struct # for predictable integer (message size) encoding to bytes
 import datetime
+import time
 import uuid
 import types # SimpleNamespace for stock enum-ish construct?
 from st_common import MessageReceiver
@@ -52,94 +54,6 @@ serversocket.listen(5) # become a server socket, maximum 5 connections
 
 lock = threading.Lock()
 
-class ChatClient:
-    def __init__(self, conn):
-        self.conn = conn
-        self.name = None
-
-        self.initialized = False     # needs to receive name and get added to collection
-        self.remaining_sz_bytes = 4
-        self.sz_bytes = b''
-        self.sz = 0                  # size of message in bytes
-        self.msg = b''               # bytes of message being received
-        self.message = None
-
-    # received as first message from a connecting client
-    def set_name(self, name):
-        self.name = name
-
-    # called when client sends data.  When a message is completed, process it
-    # message starts with 4 byte int indicating size, then that # of bytes for
-    # message body
-    def add_bytes(self, b):
-        try:
-            while b: # always substract from byte array as its processed
-                if self.remaining_sz_bytes > 0:
-                    self.sz_bytes += b[0:self.remaining_sz_bytes]
-                    b = b[self.remaining_sz_bytes:] # ans = no: could this throw error if only some of the sz_bytes came through on recv?
-                    self.remaining_sz_bytes = 4 - len(self.sz_bytes)
-                    if len(self.sz_bytes) == 4:
-                        self.sz = struct.unpack('I', self.sz_bytes)[0]
-                if b:
-                    if len(b) + len(self.msg) < self.sz:
-                        # not enough data in b to complete message
-                        self.msg += b
-                        b = b'' # stop loop
-                    else:
-                        # exactly enough or extra
-                        required_bytes = self.sz - len(self.msg)
-                        self.msg += b[0:required_bytes]
-                        # TODO: process message
-                        self.message = json.loads(self.msg.decode('utf-8'))
-                        process_message(self)
-                        b = b[required_bytes:]
-                        self.sz_bytes = b''
-                        self.remaining_sz_bytes = 4
-                        self.msg = b''
-                        self.sz = 0
-        except Exception as e:
-            print (f"EXCEPTION: {repr(e)}")
-            
-
-# NOTE: I think this class is not needed...
-class StockMarket:
-    ''' StockMarket
-        Data structure for maintaining stock prices
-    '''
-    INIT_VAL = 100      # stock price for each at game start
-    OFF_MARKET_VAL = 0  # stock goes off market if <= this price
-    SPLIT_VAL = 200     # stock will split if >= this price
-    DIV_VAL = 105       # minimum stock price to pay dividends
-
-    def __init__(self):
-        self.market = [ StockMarket.INIT_VAL for i in range(len(stock_names)) ]
-
-    def up(self, iStock, val):
-        retval = {'split': False}
-        if val < 0:
-            raise ValueError(f'{iStock} up {val} invalid')
-        self.market[iStock] += val
-        if self.market[iStock] > SPLIT_VAL:
-            retval['split'] = True
-            self.market[iStock] = INIT_VAL
-        return retval
-
-    def down(self, iStock, val):
-        retval = {'off-market': False}
-        if val < 0:
-            raise ValueError(f'{iStock} down {val} invalid')
-        self.market[iStock] -= val
-        if self.market[iStock] < OFF_MARKET_VAL:
-            retval['off-market'] = True
-            self.market[iStock] = INIT_VAL
-        return retval
-
-    def div(self, iStock, val):
-        retval = {'div': False}
-        if self.market[iStock] >= DIV_VAL:
-            retval['div'] = True
-        return retval
-            
 class Player:
     INIT_CASH = 5000
 
@@ -148,10 +62,12 @@ class Player:
         self.conn = conn
         self.message_receiver = MessageReceiver(f'msgrec-{name}', conn, process_message)
         self.message_receiver.data = name
-        self.portfolio = [ 0 for i in range(len(stock_names)) ]
+        self.portfolio = list( 0 for i in range(len(stock_names)) )
+        # NOPE self.pending_order = [ 0 for i in range(len(stock_names)) ]
         self.id = uuid.uuid4()
         self.cash = Player.INIT_CASH
         self.game = None # reference to StockTickerGame
+        self.ready_start = False
 
     # cash: amount of cash changed
     # less than zeros should be avoided by application, throw errors here
@@ -179,19 +95,63 @@ class Player:
             'portfolio': self.portfolio
         }
 
+class DiceRollTimer(threading.Thread):
+    def __init__(self, interval, fn_action):
+        super().__init__()
+        self.interval = interval
+        self.action = fn_action
+        self.daemon = True
+        self.paused = False
+        self.restart_event = threading.Event()
+
+    def run(self):
+        while True:
+            print (f"Timer countdown started! {self.interval} seconds")
+            send_all(bmsg('actiontime', self.interval))
+            time.sleep(self.interval)
+            if self.paused:
+                self.restart_event.clear()
+                self.restart_event.wait()
+                # NOTE: if paused, assume when unpaused that all players want die roll immediately
+                self.paused = False
+            self.action()
+
+    def pause(self):
+        self.paused = True
+
+    def restart(self):
+        if self.paused:
+            self.paused = False
+        if not self.restart_event.is_set():
+            self.restart_event.set()
+
 class StockTickerGame():
     '''
     Encapsulates an entire session of Stock Ticker including the market
     players.
     '''
-    INIT_VAL = 100      # stock price for each at game start
-    OFF_MARKET_VAL = 0  # stock goes off market if <= this price
-    SPLIT_VAL = 200     # stock will split if >= this price
-    DIV_VAL = 105       # minimum stock price to pay dividends
     def __init__(self):
-        self.market = [ StockTickerGame.INIT_VAL for i in range(len(stock_names)) ]
+        self.INIT_VAL = 100      # stock price for each at game start
+        self.OFF_MARKET_VAL = 0  # stock goes off market if <= this price
+        self.SPLIT_VAL = 200     # stock will split if >= this price
+        self.DIV_VAL = 105       # minimum stock price to pay dividends
+
+        self.STOCK_DIE = tuple(range(len(stock_names))) # should produce 0-5
+        self.ACTION_DIE = ('UP', 'DOWN', 'DIV')
+        self.AMOUNT_DIE = (5, 10, 20)
+
+        self.option_ignore_nopay_divrolls = True
+        self.option_timer_seconds = 1
+
+        #self.stock_names = stock_names hmm not needed
+        self.market = [ self.INIT_VAL for i in range(len(stock_names)) ]
         self.players = dict()
         self.started = False # flag indicating if game underway or not
+
+        #self.roll_timer = threading.Timer(self.option_timer_seconds, self.market_action)
+        self.roll_timer = DiceRollTimer(self.option_timer_seconds, self.market_action)
+        self.market_lock = threading.Lock()
+        # REMOVE # self.buysell_call_id = None # id of the last buysell_call sent out to players
 
     def add_player(self, player):
         if player.name in (p.name for p in self.players.values()):
@@ -209,7 +169,156 @@ class StockTickerGame():
         Get market summary to send to clients/players
         [(stockval, bln_pays_dividend), ... for each stock
         '''
-        return [(val, val>StockTickerGame.DIV_VAL) for val in self.market]
+        return [(val, val>self.DIV_VAL) for val in self.market]
+
+    def all_players_ready(self):
+        return all([p.ready_start for p in self.players.values()])
+
+    def start_game(self):
+        self.started = True
+        self.roll_timer.start()
+
+    def die_roll(self):
+        retval = {
+            'stock': random.choice(self.STOCK_DIE),
+            'action': random.choice(self.ACTION_DIE),
+            'amount': random.choice(self.AMOUNT_DIE),
+            'div_nopay': False # only true if action is div but stock too low to pay
+        }
+        # result will say if dividend will be paid so that caller can decide to ignore it if not
+        if retval['action'] == 'DIV':
+            retval['div_nopay'] = not self.pays_dividend(retval['stock'])
+        return retval
+
+    def process_order(self, player, buysell_order):
+        ''' Apply the buy/sell order '''
+        total_cents_spent = 0
+        approve_data = {
+            'reqid': buysell_order['reqid'],
+            'prices': [],
+            'reject-reason': None
+        }
+        with self.market_lock:
+            new_shares_totals = player.portfolio.copy()
+            for i, (shares, expected_price) in enumerate(buysell_order['data']):
+                approve_data['prices'].append(self.market[i])
+                total_cents_spent += shares * self.market[i]
+                new_shares_totals[i] += shares
+            total_dollars_spent = int(total_cents_spent / 100)
+            print (f'{total_dollars_spent=} {new_shares_totals=}')
+            bln_enough_cash = total_dollars_spent <= player.cash
+            bln_enough_shares = all((s>=0 for s in new_shares_totals)) 
+            if bln_enough_cash and bln_enough_shares:
+                player.cash -= total_dollars_spent
+                player.portfolio = new_shares_totals
+                approve_data['cost'] = total_dollars_spent
+                bln_approved = True
+            else:
+                approve_data['cost'] = 0
+                reasons = []
+                if not bln_enough_cash:
+                    reasons.append('not enough cash')
+                if not bln_enough_shares:
+                    reasons.append('not enough shares')
+                if reasons:
+                    approve_data['reject-reason'] = '/'.join(reasons)
+                else:
+                    approve_data['reject-reason'] = '???'
+                bln_approved = False
+            approve_data['approved'] = bln_approved
+            approve_data['cash'] = player.cash
+            approve_data['portfolio'] = player.portfolio
+        player.conn.send(bmsg('approve', approve_data))
+        
+    # NOTE: this should be called with the market_lock acquired
+    # TODO: can/should we move the message sending outside the locked area?
+    def _split(self, i_stock):
+        for player in self.players.values():
+            # dividend 20 paid out
+            div_dollars = int(player.portfolio[i_stock] * 0.2)
+            player.cash += div_dollars
+            shares_gained = player.portfolio[i_stock]
+            player.portfolio[i_stock] += shares_gained
+            split_msg_data = {
+                'stock': i_stock,
+                'newprice': self.INIT_VAL,
+                'div': self.INIT_VAL >= self.DIV_VAL, # always no after split
+                'shares': player.portfolio[i_stock],
+                'gained': shares_gained,
+                'divpaid': div_dollars,
+                'playercash': player.cash
+            }
+            player.conn.send(bmsg('split', split_msg_data))
+        self.market[i_stock] = self.INIT_VAL
+        
+    def _bust(self, i_stock):
+        for player in self.players.values():
+            shares_lost = player.portfolio[i_stock]
+            player.portfolio[i_stock] = 0
+            bust_msg_data = {
+                'stock': i_stock,
+                'newprice': self.INIT_VAL,
+                'div': self.INIT_VAL >= self.DIV_VAL,
+                'shares': 0,
+                'lost': shares_lost
+            }
+            player.conn.send(bmsg('offmarket', bust_msg_data))
+        self.market[i_stock] = self.INIT_VAL
+
+    def market_action(self):
+        '''Rolls dice and applies changes to the game'''
+        # roll the dice
+        roll = self.die_roll()
+        attempts = 1
+        max_attempts = 100
+        if self.option_ignore_nopay_divrolls:
+            while roll['div_nopay'] and attempts < max_attempts:
+                if attempts == max_attempts:
+                    raise RuntimeError(f"Too many no-pay dividend die rolls")
+                attempts += 1
+                roll = self.die_roll()
+        print (f'{roll=}')
+        
+        send_all(bmsg('roll', roll))
+        price_change_data = None
+        with self.market_lock:
+            if roll['action'] == 'UP':
+                self.market[roll['stock']] += roll['amount']
+                if self.market[roll['stock']] >= self.SPLIT_VAL:
+                    self._split(roll['stock'])
+                price_change_data = {'stock': roll['stock'],
+                        'amount': roll['amount'],
+                        'newprice': self.market[roll['stock']],
+                        'div': self.pays_dividend(roll['stock'])
+                    }
+            if roll['action'] == 'DOWN':
+                self.market[roll['stock']] -= roll['amount']
+                if self.market[roll['stock']] <= self.OFF_MARKET_VAL:
+                    self._bust(roll['stock'])
+                price_change_data = {'stock': roll['stock'],
+                        'amount': -roll['amount'],
+                        'newprice': self.market[roll['stock']],
+                        'div': self.pays_dividend(roll['stock'])
+                    }
+            if roll['action'] == 'DIV' and self.pays_dividend(roll['stock']):
+                for player in self.players.values():
+                    # dividend 20 paid out
+                    div_dollars = int(player.portfolio[roll['stock']] * roll['amount']/100)
+                    if div_dollars:
+                        player.cash += div_dollars
+                        div_msg_data = {
+                            'stock': roll['stock'],
+                            'amount': roll['amount'],
+                            'divpaid': div_dollars,
+                            'playercash': player.cash
+                        }
+                        player.conn.send(bmsg('div', div_msg_data))
+        if price_change_data:
+            send_all(bmsg('markettick', price_change_data))
+                
+
+    def pays_dividend(self, i_stock):
+        return self.market[i_stock] >= self.DIV_VAL
 
     def status(self):
         # NOTE: may add more details (e.g. paused,etc?), so using dictionary even though just 1 item...
@@ -222,7 +331,6 @@ sel.register(serversocket, selectors.EVENT_READ, "listen-new")
 #       the design such that the change will be easier
 game = StockTickerGame()
 players = dict()  # key = player name. *all* players in system
-market = StockMarket()
 
 # simple message object/dictionary
 def msg(str_type, data):
@@ -246,11 +354,41 @@ def process_message(message, playername):
     if message['TYPE'] == 'msg':
         # incoming chat message
         chat_msg = message['DATA']
-        send_all(bmsg('chatmsg', f'[{datetime.datetime.now()}] {playername}: {chat_msg}'))
+        #send_all(bmsg('chatmsg', f'[{datetime.datetime.now()}] {playername}: {chat_msg}'))
+        send_all(bmsg('chatmsg', {'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    'playername': playername,
+                    'message': chat_msg}))
     elif message['TYPE'] == 'exit':
         print (f'exit message recieved from {playername}')
         disconnect_client(player)
+    elif message['TYPE'] == 'start':
+        if not player.ready_start:
+            player.ready_start = True
+            send_all(bmsg('servermsg', f'{playername} is ready to start'))
+        if game.all_players_ready():
+            game.start_game()
+            send_all(bmsg('start', None))
+            send_all(bmsg('gamestat', game.status()))
+    elif message['TYPE'] == 'buysell':
+        game.process_order(player, message['DATA'])
+    else:
+        # ERROR
+        player.conn.send(bmsg('error', f'Unrecognized message type: {message["DATA"]}'))
+        print (f"Got bad message type {message['TYPE']} from {player.name}")
     
+
+# TODO: delete this, not going to be used
+def buysell_call(game):
+    '''
+    Send a message to clients to put in their buysell orders because a market action is
+    about to take place
+    '''
+    if game.buysell_call_id:
+        raise RuntimeError("buysell_call issued with one already active")
+    call_id = uuid.uuid4()
+    game.buysell_call_id = call_id
+    send_all(bmsg('buysell', {'reqid': call_id}))
+
 def disconnect_client(player):
     print (f'disconnect_client called for {player.name}')
     with lock: #Unsure how necessary or correct in logic this is...
@@ -261,6 +399,7 @@ def disconnect_client(player):
         player.conn.close()
     print (f'{player.name} has disconnected')
     send_all(bmsg('disconnect', player.name))
+    send_all(bmsg('playerlist', tuple(game.players.keys())))
 
 # msgobj: bytes of json message to send
 def send_all(msgobj):
@@ -300,10 +439,10 @@ while running:
                     sel.register(conn, selectors.EVENT_READ, players[player_name])
                     conn.send(bmsg('conn-accept', None))
                     conn.send(bmsg('initmkt', game.market_summary()))
-                    conn.send(bmsg('initplayer', player.summary()))
-                    conn.send(bmsg('playerlist', tuple(game.players.keys())))
+                    conn.send(bmsg('player', player.summary()))
                     conn.send(bmsg('gamestat', game.status()))
                     send_all(bmsg('joined', player_name))
+                    send_all(bmsg('playerlist', tuple(game.players.keys())))
                     print (f'[{player_name}] has joined. {len(players)} total clients')
                 else:
                     conn.close()
@@ -314,8 +453,6 @@ while running:
                 conn = key.fileobj
                 if mask & selectors.EVENT_READ:
                     msgrec = player.message_receiver
-
-                    print (f'READ event from {player.name}')
                     try:
                         b = conn.recv(1024)
                     except Exception as e:

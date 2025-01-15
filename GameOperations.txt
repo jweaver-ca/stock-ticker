@@ -5,6 +5,9 @@ can produce that the client will have to action (or ignore, etc)
 - connect to server
 - enter/change name
 - place order to buy/sell shares
+    {reqid: uuid, data: ((shares, price), (shares, price),...etc)}
+        shares: number of shares requested
+        price: the market price (cents, eg 105) for 1 share at time of order
 - quit
 - request pause on market
 

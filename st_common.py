@@ -39,7 +39,6 @@ class MessageReceiver:
     # message starts with 4 byte int indicating size, then that # of bytes for
     # message body
     def add_bytes(self, b):
-        print (f'add_bytes: {b}')
         while b: # always substract from byte array as its processed
             if self.kt:
                 # NOTE/TODO: kt is just for debugging?  there's got to be a better solution!
@@ -61,7 +60,6 @@ class MessageReceiver:
                     required_bytes = self.sz - len(self.msg)
                     self.msg += b[0:required_bytes]
                     # TODO: process message
-                    print(f'self.msg: {self.msg}')
                     self.message = json.loads(self.msg.decode('utf-8'))
                     #process_message(self)
                     if self.processor is not None:

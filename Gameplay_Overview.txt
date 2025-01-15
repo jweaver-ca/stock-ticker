@@ -1,0 +1,42 @@
+--------------------------------------------------------------------------------
+                GAMEPLAY OVERVIEW - WHILE GAME IS ACTIVE/RUNNING
+--------------------------------------------------------------------------------
+
+server will decide a die-roll is coming in X seconds and send clients
+this info.  It is up to the clients to display this information however they want
+e.g. a countdown timer or whatever (although this can't be perfectly accurate)
+Players can indicate they are ready for a die-roll early (pressing D for done or something?). ready-players cannot issue buy/sell orders. If 
+all players indicate they are ready, then the timer will be canceled and the die roll will
+happen immediately.  All player-ready-indicators are cleared after every die roll.
+A ready player can also indicate unready if they change their mind before consensus and 
+want to enable making more buy/sell orders before the die roll.
+
+Client will provide the means for a player to issue buy/sell orders. Once the player
+is happy with the buy-sell, they can submit to the server.  If player wants the order
+to be filled at current prices, it's up to them to issue the order before the server's
+timer runs out and a die roll happens.
+
+There should be a maximum buy/sell orders allowed (3? 5?) to be issued between die rolls to
+limit abuse of network bandwidth.
+
+Clients/players will have no guarantee that their order will be filled at the prices they saw
+when they issued the request.  I can't think of any way to provide this guarantee without
+opening the game up to client abuse.
+
+Orders that can't be filled because of cash shortage (assuming this would be because a
+price went up, and not a cheating client) will be refused entirely (this might be a future
+option to add to clients so a server would know what to do on player-by-plyaer basis)
+
+Server will report of summary of buy/sell of all players to all players after a die roll
+This will include all buy/sell orders since the previous die-roll.
+(not exact numbers, just 'bought Gold', 'sold X' etc)  This is just to simulate real-life
+game play where we know what the others are doing, but we generally don't know exactly
+what their holdings are. Reporting after the die roll discourages copycating.
+
+Players can request a pause to die rolls.  SErver will send a pause request to all other
+players and if they accept, game will enter a paused state (no rolls, but buysell allowed)
+once all players state they are ready (same control as ready to start game), game will resume
+If a player does not respond within a certain time (15 sec? based on die roll interval?) then
+server assumes answer is "YES ok to pause" NOTE: THIS COULD BE ABUSED IF A PLAYER NEVER 
+DECIDES TO BECOME READY AFTER A PAUSE. how to prevent abuse?
+

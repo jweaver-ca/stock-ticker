@@ -1,4 +1,6 @@
 import threading
+import uuid
+import datetime
 import queue
 import curses
 import curses.ascii
@@ -84,7 +86,14 @@ class GameBoard(object):
         self.max_stock_price = 999 # no more than 3 digits!
         self.min_stock_price = 0
         self.stock_names = lst_stock_names
+        self.stock_prices = [ 0 for s in lst_stock_names ]
+        self.player_cash = 0
+        self.player_owned = [ 0 for s in lst_stock_names ]
+        self.MIN_BLOCK_SZ = 500
+        self.BLOCK_SZ_DELTA = 500  # change block size by this much
+        self.MAX_BLOCK_SZ = 10000
         self.buysell_block_sz = 500
+        self.pending_order = [ 0 for s in lst_stock_names ]
 
         self.fields = dict() # Field objects
         self.coords = dict() # named coordinate locations
@@ -92,14 +101,20 @@ class GameBoard(object):
         self.buttongroups = dict() # key = ButtonGroup name
         self.buttongroup_first = None # ButtonGroup object ref, not name
         self.buttongroup_last = None  # ButtonGroup object ref, not name
-        self.active_buttongroup = None
+        self.active_buttongroup = None # Name
 
         #TODO: concern: circular links seem wierd here...
         self.keyboard_thread = KeyboardThread('gameboard-thread', self.scr, self)
         self.game_op_event = threading.Event()
         self.game_op_queue = queue.SimpleQueue()
 
+        # Re-entrant lock required
+        self.drawlock = threading.RLock()
+        self.curses_color = dict() # key=colorname, value=curses color pair
         self.program_exited = False # so we can stop the KeyboardThread
+
+        self.init_curses_color(1, "RED", curses.COLOR_RED)
+        self.init_curses_color(2, "GREEN", curses.COLOR_GREEN)
 
         self.scr.clear()
 
@@ -131,7 +146,7 @@ class GameBoard(object):
         # bottom of screen
         # hotkey
         self.win_hotkey = Window(self.win_main.BY(), self.win_main.LX(), 1, self.win_main.width) 
-        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]equest Pause  [Q]uit')
+        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]eady  [S]ubmit Order  [P]ause  [Q]uit')
 
         # chatmsg - entry window for typing chat message to other players
         self.win_chatmsg = Window(self.win_hotkey.TY()-2, self.win_main.LX(), 1, self.win_main.width) 
@@ -143,7 +158,7 @@ class GameBoard(object):
         # sysmsg - system/game/chat messages
         height_sysmsg = self.win_chatmsg.TY()-self.win_market.BY()-3
         self.win_sysmsg = Window(self.win_market.BY()+2, self.win_main.LX(), height_sysmsg, self.win_main.width) 
-        self.sa_sysmsg = ScrollArea(self.scr, self.win_sysmsg)
+        self.sa_sysmsg = ScrollArea(self.scr, self.win_sysmsg, self.drawlock)
 
         dict_border_cells = dict() # key = tuple (y,x), value = 
         GameBoard.apply_border(self.win_main, dict_border_cells)
@@ -180,6 +195,10 @@ class GameBoard(object):
         if self.debug:
             self.add_system_msg(f"[DEBUG]: {msg}")
 
+    def init_curses_color(self, pairnum, name, forecolor, backcolor=curses.COLOR_BLACK):
+        curses.init_pair(pairnum, forecolor, backcolor)
+        self.curses_color[name] = curses.color_pair(pairnum)
+
     def add_window_right(self, ref_win, height=None, width=None):
         '''
         Convenience method for adding a new Window located relative to an existing
@@ -210,37 +229,84 @@ class GameBoard(object):
         # NOTE: this can probably be removed, but I'm not sure yet
         pass
 
-    def update_stock_price(self, i_stock, new_price, bln_pays_div):
+    def refresh_if(self, bln_refresh):
+        if bln_refresh:
+            self.scr.refresh()
+
+    def update_stock_price(self, i_stock, new_price, bln_pays_div, bln_refresh=True):
         if new_price > self.max_stock_price:
             raise ValueError(f"[{new_price}] too high to display")
         elif new_price < self.min_stock_price:
             raise ValueError(f"[{new_price}] too low")
         char_pays_div = "✓" if bln_pays_div else " "
-        self.update_field(f'stockprice-{i_stock}', new_price)
-        self.update_field(f'stockdiv-{i_stock}', char_pays_div)
-        price_per_block = int(new_price * self.buysell_block_sz / 100)
-        self.update_field(f'blockprice-{i_stock}', price_per_block)
+        self.stock_prices[i_stock] = new_price
+        with self.drawlock:
+            self.update_field(f'stockprice-{i_stock}', new_price, bln_refresh=False)
+            self.update_field(f'stockdiv-{i_stock}', char_pays_div, bln_refresh=False)
+            price_per_block = int(new_price * self.buysell_block_sz / 100)
+            self.update_field(f'blockprice-{i_stock}', price_per_block, bln_refresh=False)
+            if self.pending_order[i_stock] > 0:
+                self.update_pending(bln_refresh=False)
+            self.refresh_if(bln_refresh)
 
-    def update_players(self, this_player_name, other_player_names):
+    def blocksz_change(self, data):
+        if data['action'] == 'down':
+            deltas = -1 * data['deltas']
+        else:
+            deltas = data['deltas']
+        new_block_sz = self.buysell_block_sz + (deltas * self.BLOCK_SZ_DELTA)
+        new_block_sz = min(new_block_sz, self.MAX_BLOCK_SZ)
+        new_block_sz = max(new_block_sz, self.MIN_BLOCK_SZ)
+        if new_block_sz == self.buysell_block_sz:
+            return # no change, ignore (minimum enforced)
+        self.buysell_block_sz = new_block_sz
+        self.update_field('blocksz', self.buysell_block_sz, bln_refresh=True)
+
+    def update_players(self, this_player_name, other_player_names, bln_refresh=True):
         '''
         Update the players participating in the game.
         called by a client program.  Following the design patter that it should
         be up to the gameboard to decide how to display the names. 
         '''
         str_players = ', '.join([this_player_name + ' (me)'] + other_player_names)
-        self.update_field('players', str_players)
+        with self.drawlock:
+            self.update_field('players', str_players)
+            self.refresh_if(bln_refresh)
 
-    def update_player(self, player_status):
+    def update_player(self, player_cash, networth, lst_owned, bln_refresh=True):
         '''
         Update this player's attributes
         '''
-        self.update_field('cash', player_status['cash'])
-        self.update_field('networth', player_status['networth'])
-        for i, owned in enumerate(player_status['portfolio']):
-            self.update_field(f'stockowned-{i}', owned)
+        self.update_player_cash(player_cash, networth, bln_refresh=False)
+        self.update_player_portfolio(lst_owned, bln_refresh=False)
+        self.refresh_if(bln_refresh)
 
-    def update_status(self, str_status):
-        self.update_field('status', str_status)
+    def update_player_cash(self, player_cash, networth, bln_refresh=True):
+        self.player_cash = player_cash
+        self.update_field('cash', player_cash, bln_refresh=False)
+        self.update_field('networth', networth, bln_refresh=False)
+        self.refresh_if(bln_refresh)
+
+    def update_player_owned(self, i_stock, shares, bln_refresh=True):
+        self.player_owned[i_stock] = shares
+        self.update_field(f'stockowned-{i_stock}', shares, bln_refresh)
+        self.refresh_if(bln_refresh)
+
+    def update_player_portfolio(self, lst_owned, bln_refresh=True):
+        for i, owned in enumerate(lst_owned):
+            if owned is not None:
+                self.update_player_owned(i, owned, bln_refresh=False)
+        self.refresh_if(bln_refresh)
+
+    def update_status(self, str_status, bln_refresh=True):
+        with self.drawlock:
+            self.update_field('status', str_status)
+            self.refresh_if(bln_refresh)
+
+    def add_chat_msg(self, chatmsg):
+        timestr = datetime.datetime.fromisoformat(chatmsg['time']).astimezone().strftime('%Y/%m/%d %H:%M:%S')
+        strchat = f'[{timestr}] {chatmsg["playername"]}: {chatmsg["message"]}'
+        self.add_system_msg(strchat)
 
     def add_system_msg(self, msg):
         self.sa_sysmsg.add_message(msg)
@@ -328,7 +394,7 @@ class GameBoard(object):
         lenowned = 6 # num of digits allowed for owned
         xplus = xowned + lenowned + 2
         self.ul_stockprice = (yoff, xprice) # store upper left of stock prices
-        self._add_button_group('buysell')
+        self._add_button_group('buysell', self.update_pending_order)
         btn_names_for_nav = []
         for i, stockname in enumerate(self.stock_names):
             self.add_text(self.win_market, yoff+i, xoff, stockname)
@@ -393,16 +459,15 @@ class GameBoard(object):
         ybot = yoff + len(self.stock_names) + 1 # top row of bottom section of window
         self.add_text(win, ybot, 1, '$') # label for dollar amount under pending
         self._add_field('pending-$', self.win_buysell, ybot, 2, width_pending-1, '>', initval=0)
+        self.fields['pending-$'].set_curses_attr_rules(self.pending_colorer)
         self.add_text(win, ybot, midx, str_blocksz, midx, '^')
-        self._add_button_group('blocksz')
-        self._add_button(self.buttongroups['blocksz'], 'blocksz-dec', '[', {'action':'down'}, win, ybot+1, midx+1)
-        self._add_button(self.buttongroups['blocksz'], 'blocksz-inc', ']', {'action':'up'}, win, ybot+1, win.width-2)
+        self._add_button_group('blocksz', self.blocksz_change)
+        self._add_button(self.buttongroups['blocksz'], 'blocksz-dec', '[', {'action':'down', 'deltas': 1}, win, ybot+1, midx+1)
+        self._add_button(self.buttongroups['blocksz'], 'blocksz-inc', ']', {'action':'up', 'deltas': 1}, win, ybot+1, win.width-2)
         self.buttongroups['blocksz'].set_nav('blocksz-dec', 'right', 'blocksz-inc')
         self.buttongroups['blocksz'].set_nav('blocksz-dec', 'next', 'blocksz-inc')
         self.buttongroups['blocksz'].set_nav('blocksz-inc', 'left', 'blocksz-dec')
         self.buttongroups['blocksz'].set_nav('blocksz-inc', 'prev', 'blocksz-dec')
-        #self.add_text(win, ybot+1, midx+1, '[')
-        #self.add_text(win, ybot+1, win.width-2, ']')
         self._add_field('blocksz', self.win_buysell, ybot+1, midx+4, 5, '>', initval=self.buysell_block_sz)
         
     def _init_draw_mkt_act(self, dict_border_cells):
@@ -418,7 +483,7 @@ class GameBoard(object):
         win.draw_hline(dict_border_cells, xlowline)
         self.add_text(win, -2, 0, str_next_action, win.width, justify='^')
         # TODO: ScrollAreas, like labels maybe should be accessible by a name??
-        self.sa_mkt_act = ScrollArea(self.scr, self.win_mkt_act, offset=(1,2,1,3))
+        self.sa_mkt_act = ScrollArea(self.scr, self.win_mkt_act, self.drawlock, offset=(1,2,1,3))
         self._add_field('next-action', win, win.height-1, 1, win.width-2, justify='^', initval="00:00.0")
 
         
@@ -498,10 +563,10 @@ class GameBoard(object):
         if initval is not None:
             self.update_field(name, initval)
 
-    def _add_button_group(self, name):
+    def _add_button_group(self, name, fn_action=None):
         if name in self.buttongroups:
             raise ValueError(f"ButtonGroup '{name}' already exists")
-        new_buttongroup = ButtonGroup(name)
+        new_buttongroup = ButtonGroup(name, fn_action)
         old_last = self.buttongroup_last
         self.buttongroups[name] = new_buttongroup
         if self.buttongroup_first is None:
@@ -543,8 +608,8 @@ class GameBoard(object):
     def get_coord(self, name):
         return self.coords[name]
 
-    def update_field(self, name, newval):
-        self.fields[name].update(self.scr, newval)
+    def update_field(self, name, newval, attr=0, bln_refresh=True):
+        self.fields[name].update(self.scr, newval, attr, bln_refresh)
 
     def activate_button_group(self, name):
         if self.active_buttongroup:
@@ -554,7 +619,6 @@ class GameBoard(object):
         self.active_buttongroup = name
         self.buttongroups[name].set_active(True)
         self.update_button_group(name)
-        self.dbg('end of activate_button_group')
 
     def update_button_group(self, name):
         '''
@@ -587,14 +651,102 @@ class GameBoard(object):
         curses.noecho()
         # NOTE: refresh required to clear out the contents and hide the cursor, etc
         curses_win.refresh()
+        
         return msg
 
+    def display_die_roll(self, roll_data, bln_refresh=True):
+        with self.drawlock:
+            self.sa_mkt_act.add_message(f'{self.stock_names[roll_data["stock"]]} {roll_data["action"]} {roll_data["amount"]}')
+            self.refresh_if(bln_refresh)
+
+    def display_split_message(self, split_data, bln_refresh=True):
+        stock = self.stock_names[split_data['stock']]
+        gained = split_data['gained']
+        with self.drawlock:
+            self.sa_sysmsg.add_message(f'{stock} has split!  You earned {gained} shares')
+            self.refresh_if(bln_refresh)
+
+    def display_bust_message(self, bust_data, bln_refresh=True):
+        stock = self.stock_names[bust_data['stock']]
+        lost = bust_data['lost']
+        with self.drawlock:
+            self.sa_sysmsg.add_message(f'{stock} has gone off the market!  You lost {lost} shares')
+            self.refresh_if(bln_refresh)
+        
     def input_chat_message(self):
         # NOTE: getstr really has to go in a curses window proper, else the entry
         #   ruins stuff to the right that's in the same window
         chat_msg = GameBoard.read_str(self.cwin_chatmsg_in).decode('utf-8')
+        # NOTE/TODO: adding redrawwin call here to see if it helps with an issue noticed
+        #   after sending a message and the screen goes wonky.
+        #   if this doesn't fix it, the call should be removed
+        self.scr.redrawwin()
         return chat_msg
         # TODO: actually send the dang message
+
+    def pending_order_cost(self):
+        cost_cents = 0
+        for i_stock, shares in enumerate(self.pending_order):
+            cost_cents += self.stock_prices[i_stock] * shares
+        return int(cost_cents / 100)
+
+    def reset_pending_order(self):
+        with self.drawlock:
+            for i in range(len(self.stock_names)):
+                self.pending_order[i] = 0
+                self.update_field(f'pending-{i}', self.pending_order[i], bln_refresh=False)
+            self.update_pending(bln_refresh=False)
+            self.refresh_if(True)
+
+    def update_pending(self, bln_refresh=True):
+        ''' called to reflect new market prices '''
+        self.update_field(f'pending-$', -self.pending_order_cost())
+        self.refresh_if(bln_refresh)
+
+    def update_pending_order(self, order_data):
+        ''' Called by clicking a buysell button '''
+        i_stock = order_data['stock']
+        share_count = self.buysell_block_sz
+        if order_data['action'] == 'buy':
+            current_cost = self.pending_order_cost()
+            extra_cost = int(self.stock_prices[i_stock] * share_count / 100)
+            projected_total = current_cost + extra_cost
+            if projected_total > self.player_cash:
+                self.dbg(f'cant afford it: {self.player_cash=} {current_cost=} {extra_cost=} {projected_total=}')
+                return # cant afford it, ignore
+            share_total = self.pending_order[i_stock] + share_count 
+        elif order_data['action'] == 'sell':
+            # sell here can really mean either 'lower the buy' or 'sell' if current pending <= 0
+            if self.player_owned[i_stock] + (self.pending_order[i_stock] - share_count) < 0:
+                self.dbg(f'below zero bro: {self.pending_order=} {share_count=} owned={self.player_owned[i_stock]}')
+                return # not enough stock, ignore
+            share_total = self.pending_order[i_stock] - share_count 
+        self.pending_order[i_stock] = share_total
+        with self.drawlock:
+            self.update_field(f'pending-{i_stock}', share_total, bln_refresh=False)
+            new_projected_total = self.pending_order_cost()
+            self.update_field(f'pending-$', -new_projected_total, bln_refresh=False)
+            self.refresh_if(True)
+
+    def buysell_approval(self, data):
+        if data['approved']:
+            self.add_system_msg(f'BuySell order #{data["reqid"]} approved')
+        else:
+            self.add_system_msg(f'BuySell order #{data["reqid"]} REJECTED ({data["reject-reason"]})')
+        self.reset_pending_order()
+
+    def report_div(self, i_stock, earned):
+        self.add_system_msg(f'{self.stock_names[i_stock]} dividend earned you ${earned}!')
+
+    def buysell_operation(self):
+        '''Create operation based on pending_order and current prices'''
+        # TODO: track reqid make sure it gets answered?? any reason why/why not?
+        reqid = str(uuid.uuid4())
+        order_data = []
+        for i, shares in enumerate(self.pending_order):
+            curprice = self.stock_prices[i]
+            order_data.append((shares, curprice))
+        return {'reqid': reqid, 'data': order_data}
 
     def nav(self, motion):
         '''
@@ -624,6 +776,7 @@ class GameBoard(object):
             self.activate_button_group(self.buttongroup_first.name)
 
     def get_operation(self, block=True, timeout=5):
+        ''' Client calls this to get the next action requested by player'''
         try:
             retval = self.game_op_queue.get(block=block,timeout=timeout)
         except queue.Empty as e:
@@ -633,6 +786,16 @@ class GameBoard(object):
     def redraw(self):
         self.scr.redrawwin()
 
+    def pending_colorer(self, val):
+        try:
+            ival = int(val)
+            if ival > 0:
+                return self.curses_color["GREEN"]
+            elif ival < 0:
+                return self.curses_color["RED"]
+        except:
+            pass
+        return 0
     # --END class GameBoard
 
 class YXCoord(object):
@@ -851,24 +1014,34 @@ class Field(object):
         if justify not in ('<', '>', '^'):
             raise ValueError(f"Bad value for just justify: [{justify}]")
         self.justify = justify
+        self.fn_curses_attr = None
 
-    def update(self, scr, newval):
+    def update(self, scr, newval, attr=0, bln_refresh=True):
         str_newval = str(newval)
         if len(str_newval) > self.length:
             raise ValueError(f"newval [{newval}] too long for this Field")
         str_fullval = f"{str_newval:{self.justify}{self.length}s}"
-        scr.addstr(self.y, self.x, str_fullval)
+        if self.fn_curses_attr:
+            attr = self.fn_curses_attr(newval)
+        # TODO; remove this todo when we know attr being None works
+        scr.addstr(self.y, self.x, str_fullval, attr)
+        if bln_refresh:
+            scr.refresh()
+
+    def set_curses_attr_rules(self, fn_rules):
+        self.fn_curses_attr = fn_rules
 
 class ScrollArea(object):
     '''
     Simple upwards scroll area (starts at bottom)
     Lines are split according to width of the given window
     '''
-    def __init__(self, scr, window, offset=None):
+    def __init__(self, scr, window, drawlock, offset=None):
         '''
         scr: curses window (from GameBoard)
         window: Window where this will go
         offset: tuple (left,up,right,down), if not given, all zeros (whole window)
+        drawlock: drawing lock provided by GameBoard to synchronize drawing
         '''
         if offset is None:
             offset = (0, 0, 0, 0)
@@ -881,12 +1054,9 @@ class ScrollArea(object):
             raise ValueError(f"offset is too large for window [{offset}]")
         self.messages = []
         self.scr = scr
-        #self.window = window
+        self.drawlock = drawlock
         self.window = Window(window.uly+offset[1], window.ulx+offset[0], thisheight, thiswidth)
-        #self.height = self.window.height
-        #self.width = self.window.width
         self.firsty = self.window.uly + self.window.height # bottom line (first)
-        print (self.window.dimensions())
 
 
     def add_message(self, str_message):
@@ -894,12 +1064,12 @@ class ScrollArea(object):
         #      mostly its just confusing why this formatting is done...
         lst_msg = [ f"{x:<{self.window.width}}" for x in textwrap.wrap(str_message,width=self.window.width)][::-1]
         self.messages = lst_msg + self.messages[:self.window.height-len(lst_msg)]
-        #for i in enumerate(reversed(range(len(self.messages)))):
-        for i in range(len(self.messages)):
-            #index = len(self.messages) - 1 - i
-            y = self.window.uly + self.window.height - i - 1
-            self.scr.addstr(y, self.window.ulx, self.messages[i])
-        self.scr.refresh()
+        with self.drawlock:
+            for i in range(len(self.messages)):
+                #index = len(self.messages) - 1 - i
+                y = self.window.uly + self.window.height - i - 1
+                self.scr.addstr(y, self.window.ulx, self.messages[i])
+            self.scr.refresh()
             
 class Dialog():
     '''
@@ -1011,15 +1181,14 @@ class Button():
         self.name = name
         self.label = str(label)
         self.group = btn_group
-        if fn_action is not None:
-            self.set_action(fn_action)
+        self.set_action(fn_action)
 
     def click(self):
         if self.action is None:
             if self.group.action is None:
                 raise ValueError("Action has not been set")
             else:
-                self.group.action(data)
+                self.group.action(self.data)
         else:
             self.action(data)
 
@@ -1041,8 +1210,9 @@ class ButtonGroup():
     '''
     NAV_VALS = ('up', 'down', 'left', 'right', 'prev', 'next')
 
-    def __init__(self, name):
+    def __init__(self, name, fn_action=None):
         self.name = name
+        self.action = fn_action
         self.buttons = dict()
         self.active_button = None # object ref, not name
         self.is_active = False
@@ -1059,7 +1229,7 @@ class ButtonGroup():
             self.active_button = btn
    
     # TODO/suspect: get/set_active_button probably not needed
-    def active_button(self):
+    def get_active_button(self):
         return self.active_button
 
     def active_button_name(self):
@@ -1109,7 +1279,7 @@ class KeyboardThread(threading.Thread):
                     self.running = False
                 continue
             ckey = chr(key)
-            self.gameboard.add_system_msg(f'KEYPRESS: {key}')
+            #self.gameboard.add_system_msg(f'KEYPRESS: {key}')
             if key in self.gameboard.keys_button_nav:
                 if self.gameboard.active_buttongroup is not None:
                     nav_lookup = {
@@ -1118,7 +1288,6 @@ class KeyboardThread(threading.Thread):
                         curses.KEY_RIGHT: 'right',
                         curses.KEY_LEFT: 'left'
                     }
-                    self.gameboard.dbg(f'nav key: {key} -> [{nav_lookup[key]}]')
                     self.gameboard.nav(nav_lookup[key])
                 else:
                     self.gameboard.dbg('no active button group')
@@ -1141,7 +1310,22 @@ class KeyboardThread(threading.Thread):
                 self.gameboard.redraw()
                 self.gameboard.scr.refresh()
                 curses.doupdate()
+            elif ckey in ('r', 'R'):
+                # request to start game (basically "I'm ready" message to server)
+                self.gameboard.game_op_queue.put(game_operation('ready-start', None))
                 # TODO: add an operation to the game_op_queue
+            elif ckey in ('p', 'P'):
+                self.gameboard.add_system_msg('Pause requested: not implemented')
+            elif ckey in ('s', 'S'):
+                self.gameboard.game_op_queue.put(game_operation('buysell', self.gameboard.buysell_operation()))
+            elif key in (curses.ascii.SP, curses.ascii.CR):
+                if not self.gameboard.active_buttongroup:
+                    self.gameboard.dbg('click but no active button group')
+                    continue
+                btn = self.gameboard.buttongroups[self.gameboard.active_buttongroup].get_active_button()
+                btn.click()
+
+                
         # end of while loop, to get here means program is exiting
                 
     def stop(self):
