@@ -98,7 +98,13 @@ def bmsg(strType, strData):
     sz = len(msgbytes)
     return struct.pack('I', sz) + msgbytes
 
+def dbg_check_sync():
+    # check gameboard data points vs. client data points
+    pass
+
 # called by client once completed message received from server
+# TODO: any operation here that modifies shared data between
+#       gameboard and the client must be synchronized
 def process_message(msgobj):
     global running
     global gameboard
@@ -121,10 +127,17 @@ def process_message(msgobj):
         gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]\n')
         running = False
     elif mtype == 'initmkt':
-        update_market(mdata)
+        # eg. ((100, False), (175, True), etc)
+        for i, (stockval, bln_div) in enumerate(mdata):
+            gameboard.update_stock_price(i, stockval, bln_div)
+            market[i] = stockval
     elif mtype == 'playerlist':
-        update_players(mdata)
+        # e.g. ('Fred', 'Joe',....)
+        # NOTE: I dont see a need for client program to track these
+        other_player_list = [ name for name in mdata if name != args.name ]
+        gameboard.update_players(args.name, other_player_list)
     elif mtype == 'gamestat':
+        # eg: {'started': True}
         update_game_status(mdata)
     elif mtype == 'actiontime':
         # TODO: animate the countdown timer
@@ -132,18 +145,31 @@ def process_message(msgobj):
         #gameboard.add_system_msg(f'Countdown to roll started: {msgobj["DATA"]}')
     elif mtype == 'roll':
         gameboard.display_die_roll(mdata)
-    elif mtype == 'market':
+    elif mtype == 'markettick':
+        #  eg {stock: 0, amount: -5, newprice: 100, div: True)
+        market[mdata['stock']] = mdata['newprice']
         gameboard.update_stock_price(mdata['stock'], mdata['newprice'], mdata['div'])
     elif mtype == 'approve':
-        gameboard.dbg(f'approve-msg: {mdata}')
+        # eg {reqid: ???, approved: bln, prices: 6 actual_prices, cost: n, cash: n, portfolio: [n,n], reject-reason: str}
         if mdata['approved']:
-            update_player({'cash': mdata['cash'], 'portfolio': mdata['portfolio']}, (i[0] for i in market))
+            update_player({'cash': mdata['cash'], 'portfolio': mdata['portfolio']}, market)
         gameboard.buysell_approval(mdata)
     elif mtype == 'split':
+        # {stock: 0-5, newprice: #, div: bln, shares: (new_total), divpaid: dollars}
+        player.cash = mdata['playercash'] 
+        networth = player.networth(market)
+        player.portfolio[mdata['stock']] = mdata['shares']
+        gameboard.update_player_cash(player.cash, networth)
+        gameboard.update_player_owned(mdata['stock'], mdata['shares'])
+        gameboard.update_stock_price(mdata['stock'], mdata['newprice'], mdata['div'])
         gameboard.display_split_message(mdata)
     elif mtype == 'offmarket':
+        # eg: stock: #, newprice: #, shares: 0, lost: 200
+        player.portfolio[mdata['stock']] = mdata['shares']
+        market[mdata['stock']] = mdata['newprice']
+        gameboard.update_stock_price(mdata['stock'], mdata['newprice'], mdata['div'])
         gameboard.display_bust_message(mdata)
-    elif mtype == 'initplayer':
+    elif mtype == 'player':
         update_player(mdata)
     elif mtype == 'start':
         gameboard.add_system_msg('All players ready. Game has started!')
@@ -151,8 +177,8 @@ def process_message(msgobj):
         gameboard.add_system_msg(str(mdata))
     elif mtype == 'div':
         player.cash = mdata['playercash']
+        gameboard.update_player_cash(mdata['playercash'],player.networth(market))
         gameboard.report_div(mdata['stock'], mdata['divpaid'])
-        gameboard.update_player_cash(mdata['playercash'],player.networth((s[0] for s in market)))
 
         # TODO set any flags here to allow gameplay
     else:
@@ -209,16 +235,6 @@ def process_quit():
     clientsocket.send(bmsg('exit', None))
     running = False
 
-def update_market(market_summary):
-    global market
-    for i, (stockval, bln_div) in enumerate(market_summary):
-        gameboard.update_stock_price(i, stockval, bln_div)
-    market = market_summary
-
-def update_players(playerlist):
-    other_player_list = [ name for name in playerlist if name != args.name ]
-    gameboard.update_players(args.name, other_player_list)
-
 def update_game_status(game_status):
     # NOTE: I think it makes sense for this to be a simple string from client to gameboard
     # A status message typically is just a plain string
@@ -233,7 +249,7 @@ def update_player(player_status, market=None):
     player.cash = player_status['cash']
     player.portfolio = player_status['portfolio']
     player_status['networth'] = player.networth(market)
-    gameboard.update_player(player_status)
+    gameboard.update_player(player_status['cash'], player_status['networth'], player_status['portfolio'])
     player.initialized = True # set flag that player object is ready to use 
     # NOTE: networth is basically useless here? it's just for diplay IMO
     
@@ -255,7 +271,7 @@ def main(stdscr):
     gameboard_thread.start()
 
     player = Player(args.name)
-    market = None
+    market = [ -1 for x in stock_names ]
 
     # --------------------------------------------------------
     # Attempt connecton to game server

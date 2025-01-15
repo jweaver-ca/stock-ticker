@@ -104,6 +104,8 @@ class GameBoard(object):
         self.game_op_event = threading.Event()
         self.game_op_queue = queue.SimpleQueue()
 
+        # Re-entrant lock required
+        self.drawlock = threading.RLock()
         self.program_exited = False # so we can stop the KeyboardThread
 
         self.scr.clear()
@@ -215,42 +217,65 @@ class GameBoard(object):
         # NOTE: this can probably be removed, but I'm not sure yet
         pass
 
-    def update_stock_price(self, i_stock, new_price, bln_pays_div):
+    def refresh_if(self, bln_refresh):
+        if bln_refresh:
+            self.scr.refresh()
+
+    def update_stock_price(self, i_stock, new_price, bln_pays_div, bln_refresh=True):
         if new_price > self.max_stock_price:
             raise ValueError(f"[{new_price}] too high to display")
         elif new_price < self.min_stock_price:
             raise ValueError(f"[{new_price}] too low")
         char_pays_div = "✓" if bln_pays_div else " "
         self.stock_prices[i_stock] = new_price
-        self.update_field(f'stockprice-{i_stock}', new_price)
-        self.update_field(f'stockdiv-{i_stock}', char_pays_div)
-        price_per_block = int(new_price * self.buysell_block_sz / 100)
-        self.update_field(f'blockprice-{i_stock}', price_per_block)
-        if self.pending_order[i_stock] > 0:
-            self.update_pending()
+        with self.drawlock:
+            self.update_field(f'stockprice-{i_stock}', new_price, bln_refresh=False)
+            self.update_field(f'stockdiv-{i_stock}', char_pays_div, bln_refresh=False)
+            price_per_block = int(new_price * self.buysell_block_sz / 100)
+            self.update_field(f'blockprice-{i_stock}', price_per_block, bln_refresh=False)
+            if self.pending_order[i_stock] > 0:
+                self.update_pending()
+            self.refresh_if(bln_refresh)
 
-    def update_players(self, this_player_name, other_player_names):
+    def update_players(self, this_player_name, other_player_names, bln_refresh=True):
         '''
         Update the players participating in the game.
         called by a client program.  Following the design patter that it should
         be up to the gameboard to decide how to display the names. 
         '''
         str_players = ', '.join([this_player_name + ' (me)'] + other_player_names)
-        self.update_field('players', str_players)
+        with self.drawlock:
+            self.update_field('players', str_players)
+            self.refresh_if(bln_refresh)
 
-    def update_player(self, player_status):
+    def update_player(self, player_cash, networth, lst_owned, bln_refresh=True):
         '''
         Update this player's attributes
         '''
-        self.update_field('cash', player_status['cash'])
-        self.player_cash = player_status['cash']
-        self.update_field('networth', player_status['networth'])
-        for i, owned in enumerate(player_status['portfolio']):
-            self.update_field(f'stockowned-{i}', owned)
-        self.player_owned = player_status['portfolio']
+        self.update_player_cash(player_cash, networth, bln_refresh=False)
+        self.update_player_portfolio(lst_owned, bln_refresh=False)
+        self.refresh_if(bln_refresh)
 
-    def update_status(self, str_status):
-        self.update_field('status', str_status)
+    def update_player_cash(self, player_cash, networth, bln_refresh=True):
+        self.player_cash = player_cash
+        self.update_field('cash', player_cash, bln_refresh=False)
+        self.update_field('networth', networth, bln_refresh=False)
+        self.refresh_if(bln_refresh)
+
+    def update_player_owned(self, i_stock, shares, bln_refresh=True):
+        self.player_owned[i_stock] = shares
+        self.update_field(f'stockowned-{i_stock}', shares, bln_refresh)
+
+    def update_player_portfolio(self, lst_owned, bln_refresh=True):
+        for i, owned in enumerate(lst_owned):
+            if owned is not None:
+                self.update_player_owned(i, owned, bln_refresh=False)
+        self.refresh_if(bln_refresh)
+
+    def update_status(self, str_status, bln_refresh=True):
+        with self.drawlock:
+            self.update_field('status', str_status)
+            self.refresh_if(bln_refresh)
 
     def add_system_msg(self, msg):
         self.sa_sysmsg.add_message(msg)
@@ -551,8 +576,8 @@ class GameBoard(object):
     def get_coord(self, name):
         return self.coords[name]
 
-    def update_field(self, name, newval):
-        self.fields[name].update(self.scr, newval)
+    def update_field(self, name, newval, bln_refresh=True):
+        self.fields[name].update(self.scr, newval, bln_refresh)
 
     def activate_button_group(self, name):
         if self.active_buttongroup:
@@ -597,23 +622,24 @@ class GameBoard(object):
         
         return msg
 
-    def update_player_cash(self, playercash, networth):
-        self.playercash = playercash
-        self.update_field('cash', playercash)
-        self.update_field('networth', networth)
+    def display_die_roll(self, roll_data, bln_refresh=True):
+        with self.drawlock:
+            self.sa_mkt_act.add_message(f'{self.stock_names[roll_data["stock"]]} {roll_data["action"]} {roll_data["amount"]}')
+            self.refresh_if(bln_refresh)
 
-    def display_die_roll(self, roll_data):
-        self.sa_mkt_act.add_message(f'{self.stock_names[roll_data["stock"]]} {roll_data["action"]} {roll_data["amount"]}')
-
-    def display_split_message(self, split_data):
+    def display_split_message(self, split_data, bln_refresh=True):
         stock = self.stock_names[split_data['stock']]
         gained = split_data['gained']
-        self.sa_sysmsg.add_message(f'{stock} has split!  You earned {gained} shares')
+        with self.drawlock:
+            self.sa_sysmsg.add_message(f'{stock} has split!  You earned {gained} shares')
+            self.refresh_if(bln_refresh)
 
-    def display_bust_message(self, bust_data):
+    def display_bust_message(self, bust_data, bln_refresh=True):
         stock = self.stock_names[bust_data['stock']]
         lost = bust_data['lost']
-        self.sa_sysmsg.add_message(f'{stock} has gone off the market!  You lost {lost} shares')
+        with self.drawlock:
+            self.sa_sysmsg.add_message(f'{stock} has gone off the market!  You lost {lost} shares')
+            self.refresh_if(bln_refresh)
         
     def input_chat_message(self):
         # NOTE: getstr really has to go in a curses window proper, else the entry
@@ -655,8 +681,9 @@ class GameBoard(object):
                 return # cant afford it, ignore
             share_total = self.pending_order[i_stock] + share_count 
         elif order_data['action'] == 'sell':
-            if self.pending_order[i_stock] < share_count:
-                self.dbg('below zero bro')
+            # sell here can really mean either 'lower the buy' or 'sell' if current pending <= 0
+            if self.player_owned[i_stock] + (self.pending_order[i_stock] - share_count) < 0:
+                self.dbg(f'below zero bro: {self.pending_order=} {share_count=} owned={self.player_owned[i_stock]}')
                 return # not enough stock, ignore
             share_total = self.pending_order[i_stock] - share_count 
         self.pending_order[i_stock] = share_total
@@ -941,12 +968,15 @@ class Field(object):
             raise ValueError(f"Bad value for just justify: [{justify}]")
         self.justify = justify
 
-    def update(self, scr, newval):
+    def update(self, scr, newval, attr=None, bln_refresh=True):
         str_newval = str(newval)
         if len(str_newval) > self.length:
             raise ValueError(f"newval [{newval}] too long for this Field")
         str_fullval = f"{str_newval:{self.justify}{self.length}s}"
-        scr.addstr(self.y, self.x, str_fullval)
+        # TODO; remove this todo when we know attr being None works
+        scr.addstr(self.y, self.x, str_fullval, attr)
+        if bln_refresh:
+            scr.refresh()
 
 class ScrollArea(object):
     '''

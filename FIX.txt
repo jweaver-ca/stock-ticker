@@ -1,0 +1,7 @@
+- split didn't update the new shares owned
+- bust also didnt' update
+- reverse sign on pending, add color green/red
+- examine making it impossible for two threads to access window drawing 
+    > make drawing and refresh operations atomic?
+- enable blocksz buttons
+

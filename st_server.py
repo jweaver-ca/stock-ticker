@@ -242,10 +242,11 @@ class StockTickerGame():
             split_msg_data = {
                 'stock': i_stock,
                 'newprice': self.INIT_VAL,
-                'div': self.INIT_VAL >= self.DIV_VAL, 
+                'div': self.INIT_VAL >= self.DIV_VAL, # always no after split
                 'shares': player.portfolio[i_stock],
                 'gained': shares_gained,
-                'divpaid': div_dollars
+                'divpaid': div_dollars,
+                'playercash': player.cash
             }
             player.conn.send(bmsg('split', split_msg_data))
         self.market[i_stock] = self.INIT_VAL
@@ -257,6 +258,7 @@ class StockTickerGame():
             bust_msg_data = {
                 'stock': i_stock,
                 'newprice': self.INIT_VAL,
+                'div': self.INIT_VAL >= self.DIV_VAL,
                 'shares': 0,
                 'lost': shares_lost
             }
@@ -312,7 +314,7 @@ class StockTickerGame():
                         }
                         player.conn.send(bmsg('div', div_msg_data))
         if price_change_data:
-            send_all(bmsg('market', price_change_data))
+            send_all(bmsg('markettick', price_change_data))
                 
 
     def pays_dividend(self, i_stock):
@@ -434,7 +436,7 @@ while running:
                     sel.register(conn, selectors.EVENT_READ, players[player_name])
                     conn.send(bmsg('conn-accept', None))
                     conn.send(bmsg('initmkt', game.market_summary()))
-                    conn.send(bmsg('initplayer', player.summary()))
+                    conn.send(bmsg('player', player.summary()))
                     conn.send(bmsg('gamestat', game.status()))
                     send_all(bmsg('joined', player_name))
                     send_all(bmsg('playerlist', tuple(game.players.keys())))

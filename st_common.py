@@ -60,7 +60,6 @@ class MessageReceiver:
                     required_bytes = self.sz - len(self.msg)
                     self.msg += b[0:required_bytes]
                     # TODO: process message
-                    print(f'self.msg: {self.msg}')
                     self.message = json.loads(self.msg.decode('utf-8'))
                     #process_message(self)
                     if self.processor is not None:
