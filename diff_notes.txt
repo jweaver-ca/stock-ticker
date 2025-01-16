@@ -1,0 +1,17 @@
+lobby-dev changes to st_server.py (* means st_client.py requires update)
+--------------------------------------------------
+    - add Client class
+    - Player class is via StockTickerGame.add_player(client)
+*   - game has a id, name property (name, id need to be included in join request)
+    - INIT_CASH is property of game object (not Player class) i.e. adjustable
+*   - 'approve' message 'prices' prop renamed 'order'
+    - _split/_bust() renamed
+    - StockTickerGame.die_roll() created
+    - market_action cleand up
+    - roll_div_unpaid added
+    - global game becomes games, now dict()
+    - players global becomes clients
+*   - client/server handshake adds 'join_request' step
+*       > 'join-game', 'initgame', 'joinfail'
+    - send_all_game(), send_others_game() added for messages
+*   - initial handshake changed
