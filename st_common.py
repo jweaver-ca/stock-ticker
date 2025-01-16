@@ -70,7 +70,7 @@ class MessageReceiver:
                     self.sz = 0
                     self.message = None
 
-    def get_message(self):
+    def get_message(self, timeout=None):
         if self.processor is not None:
             raise ValueError("MessageReciever not set up as queue")
-        return self.queue.get(block=True)
+        return self.queue.get(block=True, timeout=timeout)

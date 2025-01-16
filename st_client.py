@@ -105,6 +105,9 @@ def dbg_check_sync():
 # called by client once completed message received from server
 # TODO: any operation here that modifies shared data between
 #       gameboard and the client must be synchronized
+# NOTE/design: I don't think this function should access the gameboard
+#   directly because these messages come from the server.  The Client should
+#   have an intermediary object...
 def process_message(msgobj):
     global running
     global gameboard
@@ -118,7 +121,26 @@ def process_message(msgobj):
         gameboard.add_system_msg(f'ERROR FROM SERVER: {msgobj["DATA"]}\n')
         running = False
     elif mtype == 'conn-accept':
-        gameboard.add_system_msg("** connection to server accepted **\n")
+        # TODO: Once game is initialized, send server a ready signal
+        # data: ((name,id),(name,id),etc games that can be joined
+        print ("Select a game to join:")
+        maxsel = 1
+        for i, (name, gid) in enumerate(mdata):
+            print (f" "
+            maxsel += 1
+        range_msg = f" 1-{maxsel}" if maxsel > 1 else ""
+        prompt = f"Enter a number{range_msg} (Q to quit): "
+        selgame = None
+        while selgame is None:
+            ans = input(prompt)
+            if ans in ('q','Q'):
+                exit(0)
+            try:
+                selgame = mdata[int(ans) - 1]
+            except:
+                selgame = None
+        conn.send(bmsg('join-game', selgame))
+        DEL THIS gameboard.add_system_msg("** connection to server accepted **\n")
     elif mtype == 'disconnect':
         gameboard.add_system_msg(f'[{msgobj["DATA"]} has disconnected]\n')
     elif mtype == 'joined':
@@ -150,7 +172,7 @@ def process_message(msgobj):
         market[mdata['stock']] = mdata['newprice']
         gameboard.update_stock_price(mdata['stock'], mdata['newprice'], mdata['div'])
     elif mtype == 'approve':
-        # eg {reqid: ???, approved: bln, prices: 6 actual_prices, cost: n, cash: n, portfolio: [n,n], reject-reason: str}
+        # eg {reqid: ???, approved: bln, order: ((#shares, $/share-actual),(etc..)), cost: n, cash: n, portfolio: [n,n], reject-reason: str}
         if mdata['approved']:
             update_player({'cash': mdata['cash'], 'portfolio': mdata['portfolio']}, market)
         gameboard.buysell_approval(mdata)
@@ -217,7 +239,7 @@ def process_gameboard_ops(gameboard):
         otype = op['TYPE']
         odata = op['DATA']
         if otype == 'chat-message':
-            send_chat_message(op['DATA'])
+            send_chat_message(odata)
         elif otype == 'quit':
             process_quit()
         elif otype == 'ready-start':
@@ -228,7 +250,9 @@ def process_gameboard_ops(gameboard):
                 gameboard.dbg('game start requested again')
         elif otype == 'buysell':
             # TODO: game status must be checked
-            clientsocket.send(bmsg('buysell', odata))
+            # format {reqid: str, data: ((shares, price), etc}
+            if not all(x[0]==0 for x in odata['data']):
+                clientsocket.send(bmsg('buysell', odata))
         else:
             gameboard.add_system_msg('ERROR: bad game operation type: {op["TYPE"]}')
 
@@ -258,9 +282,13 @@ def update_player(player_status, market=None):
     # NOTE: networth is basically useless here? it's just for diplay IMO
     
 #try:
-def main(stdscr):
+def main(stdscr, x):
     curses.curs_set(0)
     curses.start_color()
+
+    if x == "bro":
+        print ('got bro')
+        exit(0)
 
     global gameboard
     global player
@@ -280,6 +308,8 @@ def main(stdscr):
 
     # --------------------------------------------------------
     # Attempt connecton to game server
+    # TODO: connection to game server should happen BEFORE all the game elements
+    #  are created because a server has to have the chance to reject the connection
     # --------------------------------------------------------
     try:
         clientsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -342,5 +372,5 @@ def main(stdscr):
     print ('end main: ' + str(datetime.datetime.now()))
 
 if __name__ == '__main__':
-    curses.wrapper(main)
+    curses.wrapper(main, "bro")
     print ('final exit')

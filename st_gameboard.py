@@ -405,9 +405,6 @@ class GameBoard(object):
             self._add_button(self.buttongroups['buysell'], btn_name_sell, '-', {'action':'sell', 'stock': i}, self.win_market, yoff+i, xminus)
             self._add_button(self.buttongroups['buysell'], btn_name_buy, '+', {'action':'buy', 'stock': i}, self.win_market, yoff+i, xplus)
             btn_names_for_nav.append((btn_name_sell, btn_name_buy))
-            #self.buttongroups['buysell'].add_button(Button('+', {action:'buy', stock: i}), f'buy-{i}', self.win_market, yoff+i, xplus)
-            #self.add_text(self.win_market, yoff+i, xminus, '-')
-            #self.add_text(self.win_market, yoff+i, xplus, '+')
             self._add_field(f'stockowned-{i}', self.win_market, yoff+i, xowned, lenowned, initval=0, justify='>')
         for i, (btn_name_sell, btn_name_buy) in enumerate(btn_names_for_nav):
             i_next = (i+1) % len(btn_names_for_nav)
@@ -416,10 +413,10 @@ class GameBoard(object):
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'next', btn_name_buy)
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'up', f'sell-{i_prev}')
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'down', f'sell-{i_next}')
-            self.buttongroups['buysell'].set_nav(btn_name_sell, 'left', f'buy-{i_prev}')
+            #self.buttongroups['buysell'].set_nav(btn_name_sell, 'left', f'buy-{i_prev}')
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'prev', f'buy-{i_prev}')
 
-            self.buttongroups['buysell'].set_nav(btn_name_buy, 'right', f'sell-{i_next}')
+            #self.buttongroups['buysell'].set_nav(btn_name_buy, 'right', f'sell-{i_next}')
             self.buttongroups['buysell'].set_nav(btn_name_buy, 'next', f'sell-{i_next}')
             self.buttongroups['buysell'].set_nav(btn_name_buy, 'up', f'buy-{i_prev}')
             self.buttongroups['buysell'].set_nav(btn_name_buy, 'down', f'buy-{i_next}')
@@ -735,9 +732,14 @@ class GameBoard(object):
 
     def buysell_approval(self, data):
         if data['approved']:
-            self.add_system_msg(f'BuySell order #{data["reqid"]} approved')
+            lst_summary = []
+            for i,(shares, cost) in enumerate(data['order']):
+                if shares != 0:
+                    lst_summary.append(f"{self.stock_names[i]} {shares:+}")
+            str_summary = ', '.join(lst_summary)
+            self.add_system_msg(f'BuySell order approved: {str_summary}')
         else:
-            self.add_system_msg(f'BuySell order #{data["reqid"]} REJECTED ({data["reject-reason"]})')
+            self.add_system_msg(f'BuySell order REJECTED: {data["reject-reason"]}')
         self.reset_pending_order()
 
     def report_div(self, i_stock, earned):
@@ -751,7 +753,9 @@ class GameBoard(object):
         for i, shares in enumerate(self.pending_order):
             curprice = self.stock_prices[i]
             order_data.append((shares, curprice))
-        return {'reqid': reqid, 'data': order_data}
+        if not all(x[0]==0 for x in order_data):
+            return {'reqid': reqid, 'data': order_data}
+        return None
 
     def nav(self, motion):
         '''
@@ -801,6 +805,57 @@ class GameBoard(object):
         except:
             pass
         return 0
+
+    def keyboard_handler(curses_key):
+        ckey = chr(key)
+        #self.add_system_msg(f'KEYPRESS: {key}')
+        if key in self.keys_button_nav:
+            if self.active_buttongroup is not None:
+                nav_lookup = {
+                    curses.KEY_UP: 'up',
+                    curses.KEY_DOWN: 'down',
+                    curses.KEY_RIGHT: 'right',
+                    curses.KEY_LEFT: 'left'
+                }
+                self.nav(nav_lookup[key])
+            else:
+                self.dbg('no active button group')
+        #NOTE: cant find a good curses way to read TAB...
+        elif key == curses.ascii.TAB:
+            self.buttongroup_nav('next')
+        elif key == curses.KEY_STAB:
+            self.buttongroup_nav('prev')
+        elif ckey in ('q', 'Q'):
+            #self.running = False
+            self.game_op_queue.put(game_operation('quit', None))
+            self.running = False # when we know for sure we want to exit, stop the loop
+        elif ckey in ('m', 'M'):
+            # TODO: how do we send the damn message????
+            str_msg = self.input_chat_message()
+            if (str_msg):
+                self.game_op_queue.put(game_operation('chat-message', str_msg))
+        elif ckey in ('f', 'F'):
+            self.add_system_msg('redraw requested')
+            self.redraw()
+            self.scr.refresh()
+            curses.doupdate()
+        elif ckey in ('r', 'R'):
+            # request to start game (basically "I'm ready" message to server)
+            self.game_op_queue.put(game_operation('ready-start', None))
+            # TODO: add an operation to the game_op_queue
+        elif ckey in ('p', 'P'):
+            self.add_system_msg('Pause requested: not implemented')
+        elif ckey in ('s', 'S'):
+            op_data = self.buysell_operation()
+            if op_data: # None if no pending order
+                self.game_op_queue.put(game_operation('buysell', op_data))
+        elif key in (curses.ascii.SP, curses.ascii.CR):
+            if not self.active_buttongroup:
+                self.dbg('click but no active button group')
+                continue
+            btn = self.buttongroups[self.active_buttongroup].get_active_button()
+            btn.click()
+
     # --END class GameBoard
 
 class YXCoord(object):
@@ -1263,13 +1318,19 @@ class ButtonGroup():
 #  GameBoard. I think that makes sense since GameBoard has the hotkeys
 # etc.
 class KeyboardThread(threading.Thread):
-    def __init__(self, name, scr, gameboard, daemon=True):
+    def __init__(self, name, scr, handler, daemon=True):
         super().__init__(name=name)
         self.scr = scr
+        self.hander = handler
         self.msg = ""
         self.daemon = True
         self.running = False
-        self.gameboard = gameboard
+
+    def set_scr(self, scr):
+        self.scr = scr
+
+    def set_handler(self, handler):
+        self.handler = handler
 
     def run(self):
         self.running = True
@@ -1281,58 +1342,26 @@ class KeyboardThread(threading.Thread):
                 if self.gameboard.program_exited:
                     self.running = False
                 continue
-            ckey = chr(key)
-            #self.gameboard.add_system_msg(f'KEYPRESS: {key}')
-            if key in self.gameboard.keys_button_nav:
-                if self.gameboard.active_buttongroup is not None:
-                    nav_lookup = {
-                        curses.KEY_UP: 'up',
-                        curses.KEY_DOWN: 'down',
-                        curses.KEY_RIGHT: 'right',
-                        curses.KEY_LEFT: 'left'
-                    }
-                    self.gameboard.nav(nav_lookup[key])
-                else:
-                    self.gameboard.dbg('no active button group')
-            #NOTE: cant find a good curses way to read TAB...
-            elif key == curses.ascii.TAB:
-                self.gameboard.buttongroup_nav('next')
-            elif key == curses.KEY_STAB:
-                self.gameboard.buttongroup_nav('prev')
-            elif ckey in ('q', 'Q'):
-                #self.running = False
-                self.gameboard.game_op_queue.put(game_operation('quit', None))
-                self.running = False # when we know for sure we want to exit, stop the loop
-            elif ckey in ('m', 'M'):
-                # TODO: how do we send the damn message????
-                str_msg = self.gameboard.input_chat_message()
-                if (str_msg):
-                    self.gameboard.game_op_queue.put(game_operation('chat-message', str_msg))
-            elif ckey in ('f', 'F'):
-                self.gameboard.add_system_msg('redraw requested')
-                self.gameboard.redraw()
-                self.gameboard.scr.refresh()
-                curses.doupdate()
-            elif ckey in ('r', 'R'):
-                # request to start game (basically "I'm ready" message to server)
-                self.gameboard.game_op_queue.put(game_operation('ready-start', None))
-                # TODO: add an operation to the game_op_queue
-            elif ckey in ('p', 'P'):
-                self.gameboard.add_system_msg('Pause requested: not implemented')
-            elif ckey in ('s', 'S'):
-                self.gameboard.game_op_queue.put(game_operation('buysell', self.gameboard.buysell_operation()))
-            elif key in (curses.ascii.SP, curses.ascii.CR):
-                if not self.gameboard.active_buttongroup:
-                    self.gameboard.dbg('click but no active button group')
-                    continue
-                btn = self.gameboard.buttongroups[self.gameboard.active_buttongroup].get_active_button()
-                btn.click()
-
-                
+            handler(key)
         # end of while loop, to get here means program is exiting
                 
     def stop(self):
         self.running = False
+
+class LobbyBoard():
+    def __init__(self, scr):
+        self.border = scr
+        self.border.box()
+        self.border.refresh()
+        x, x = (i-2 for i in scr.getmaxyx())
+        self.scr = self.border.derwin(y, x, 1, 1)
+        self.scr.erase()
+        self.scr.box()
+        self.scr.refresh()
+
+        self.scr.addstr(
+
+    def 
 
 def main(stdscr):
     curses.curs_set(0)
