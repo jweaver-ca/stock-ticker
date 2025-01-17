@@ -33,17 +33,11 @@ class MessageReceiver:
         self.message = None          # completed message object once all received
         self.data = None             # optionally send this as extra arg to fn_processor
 
-        self.kt = None # TODO remove this altogether, just here to avoid exception
-
     # called when bytes received over connection conn.  When a message is completed, process it
     # message starts with 4 byte int indicating size, then that # of bytes for
     # message body
     def add_bytes(self, b):
         while b: # always substract from byte array as its processed
-            if self.kt:
-                # NOTE/TODO: kt is just for debugging?  there's got to be a better solution!
-                self.kt.scr.addstr(f'{b}\n')
-                self.kt.scr.refresh()
             if self.remaining_sz_bytes > 0:
                 self.sz_bytes += b[0:self.remaining_sz_bytes]
                 b = b[self.remaining_sz_bytes:]

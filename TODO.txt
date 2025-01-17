@@ -1,0 +1,21 @@
+- client/server. add sync checks (e.g. is cash/holdings the same?) between client/server to detect bugs
+- gameboard. if block_size > owned, allow it to go to zero
+- gameboard. see if clearing first can help request to redraw screen
+	It doesn't look it. I think the artifacts become part of the screen data
+	by accident and only by specific call to redraw those areas how they are
+	supposed to be will fix.  Or erase whole screen and re-draw all windows.
+- server/client. bust should report all players' losses to all players (because
+    it doesn't give much away and could be funny)
+- implement chat message entry without getstr(). this is what causes all the drawing artifacts now
+    now that event-driven draw operations are synchronized
+- gameboard. add [C]ancel Order to gameboard menu bar (clears pending)
+- client. on start, get name if not provided (no curses?), check server, then start curses
+- client. enable [, ] buttons to raise/lower buysell block size
+- client. update status to include game name once joined
+
+--------------------------------------------------------------------------------
+  DONE
+--------------------------------------------------------------------------------
+- gameboard and client should ignore attempt to submit empty order
+- lleft/right arrow keys should not change rows in buysell buttongroup
+- buysell approval should not print reqid, should print summary

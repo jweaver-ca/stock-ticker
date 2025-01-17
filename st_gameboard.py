@@ -304,6 +304,7 @@ class GameBoard(object):
             self.refresh_if(bln_refresh)
 
     def add_chat_msg(self, chatmsg):
+        #{time: isoformat.utc, playername: str, message: str}
         timestr = datetime.datetime.fromisoformat(chatmsg['time']).astimezone().strftime('%Y/%m/%d %H:%M:%S')
         strchat = f'[{timestr}] {chatmsg["playername"]}: {chatmsg["message"]}'
         self.add_system_msg(strchat)
@@ -405,9 +406,6 @@ class GameBoard(object):
             self._add_button(self.buttongroups['buysell'], btn_name_sell, '-', {'action':'sell', 'stock': i}, self.win_market, yoff+i, xminus)
             self._add_button(self.buttongroups['buysell'], btn_name_buy, '+', {'action':'buy', 'stock': i}, self.win_market, yoff+i, xplus)
             btn_names_for_nav.append((btn_name_sell, btn_name_buy))
-            #self.buttongroups['buysell'].add_button(Button('+', {action:'buy', stock: i}), f'buy-{i}', self.win_market, yoff+i, xplus)
-            #self.add_text(self.win_market, yoff+i, xminus, '-')
-            #self.add_text(self.win_market, yoff+i, xplus, '+')
             self._add_field(f'stockowned-{i}', self.win_market, yoff+i, xowned, lenowned, initval=0, justify='>')
         for i, (btn_name_sell, btn_name_buy) in enumerate(btn_names_for_nav):
             i_next = (i+1) % len(btn_names_for_nav)
@@ -416,10 +414,10 @@ class GameBoard(object):
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'next', btn_name_buy)
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'up', f'sell-{i_prev}')
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'down', f'sell-{i_next}')
-            self.buttongroups['buysell'].set_nav(btn_name_sell, 'left', f'buy-{i_prev}')
+            #self.buttongroups['buysell'].set_nav(btn_name_sell, 'left', f'buy-{i_prev}')
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'prev', f'buy-{i_prev}')
 
-            self.buttongroups['buysell'].set_nav(btn_name_buy, 'right', f'sell-{i_next}')
+            #self.buttongroups['buysell'].set_nav(btn_name_buy, 'right', f'sell-{i_next}')
             self.buttongroups['buysell'].set_nav(btn_name_buy, 'next', f'sell-{i_next}')
             self.buttongroups['buysell'].set_nav(btn_name_buy, 'up', f'buy-{i_prev}')
             self.buttongroups['buysell'].set_nav(btn_name_buy, 'down', f'buy-{i_next}')
@@ -609,7 +607,11 @@ class GameBoard(object):
         return self.coords[name]
 
     def update_field(self, name, newval, attr=0, bln_refresh=True):
-        self.fields[name].update(self.scr, newval, attr, bln_refresh)
+        # Field.update returns the curses.addstr args so GameBoard can draw
+        addstr_args = self.fields[name].update(newval, attr, bln_refresh)
+        with self.drawlock:
+            self.scr.addstr(*addstr_args)
+            self.scr.refresh()
 
     def activate_button_group(self, name):
         if self.active_buttongroup:
@@ -629,13 +631,14 @@ class GameBoard(object):
         a new Button becomes active/inactive.
         '''
         btngrp = self.buttongroups[name]
-        for name, btn in btngrp.buttons.items():
-            if btngrp.active_button.name == name and btngrp.is_active:
-                # TODO draw as active, reverse video of its label
-                self.scr.addstr(btn.y, btn.x, btn.label, curses.A_REVERSE)
-            else:
-                self.scr.addstr(btn.y, btn.x, btn.label)
-        self.scr.refresh()
+        with self.drawlock:
+            for name, btn in btngrp.buttons.items():
+                if btngrp.active_button.name == name and btngrp.is_active:
+                    # TODO draw as active, reverse video of its label
+                    self.scr.addstr(btn.y, btn.x, btn.label, curses.A_REVERSE)
+                else:
+                    self.scr.addstr(btn.y, btn.x, btn.label)
+            self.scr.refresh()
 
     def read_str(curses_win):
         # NOTE: this is a static method
@@ -730,9 +733,14 @@ class GameBoard(object):
 
     def buysell_approval(self, data):
         if data['approved']:
-            self.add_system_msg(f'BuySell order #{data["reqid"]} approved')
+            lst_summary = []
+            for i,(shares, cost) in enumerate(data['order']):
+                if shares != 0:
+                    lst_summary.append(f"{self.stock_names[i]} {shares:+}")
+            str_summary = ', '.join(lst_summary)
+            self.add_system_msg(f'BuySell order approved: {str_summary}')
         else:
-            self.add_system_msg(f'BuySell order #{data["reqid"]} REJECTED ({data["reject-reason"]})')
+            self.add_system_msg(f'BuySell order REJECTED: {data["reject-reason"]}')
         self.reset_pending_order()
 
     def report_div(self, i_stock, earned):
@@ -746,7 +754,9 @@ class GameBoard(object):
         for i, shares in enumerate(self.pending_order):
             curprice = self.stock_prices[i]
             order_data.append((shares, curprice))
-        return {'reqid': reqid, 'data': order_data}
+        if not all(x[0]==0 for x in order_data):
+            return {'reqid': reqid, 'data': order_data}
+        return None
 
     def nav(self, motion):
         '''
@@ -1016,17 +1026,15 @@ class Field(object):
         self.justify = justify
         self.fn_curses_attr = None
 
-    def update(self, scr, newval, attr=0, bln_refresh=True):
+    # TODO: should not draw, should return the addstr args to GameBoard
+    def update(self, newval, attr=0, bln_refresh=True):
         str_newval = str(newval)
         if len(str_newval) > self.length:
             raise ValueError(f"newval [{newval}] too long for this Field")
         str_fullval = f"{str_newval:{self.justify}{self.length}s}"
         if self.fn_curses_attr:
             attr = self.fn_curses_attr(newval)
-        # TODO; remove this todo when we know attr being None works
-        scr.addstr(self.y, self.x, str_fullval, attr)
-        if bln_refresh:
-            scr.refresh()
+        return (self.y, self.x, str_fullval, attr)
 
     def set_curses_attr_rules(self, fn_rules):
         self.fn_curses_attr = fn_rules
@@ -1317,7 +1325,9 @@ class KeyboardThread(threading.Thread):
             elif ckey in ('p', 'P'):
                 self.gameboard.add_system_msg('Pause requested: not implemented')
             elif ckey in ('s', 'S'):
-                self.gameboard.game_op_queue.put(game_operation('buysell', self.gameboard.buysell_operation()))
+                op_data = self.gameboard.buysell_operation()
+                if op_data: # None if no pending order
+                    self.gameboard.game_op_queue.put(game_operation('buysell', op_data))
             elif key in (curses.ascii.SP, curses.ascii.CR):
                 if not self.gameboard.active_buttongroup:
                     self.gameboard.dbg('click but no active button group')
