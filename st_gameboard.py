@@ -405,9 +405,6 @@ class GameBoard(object):
             self._add_button(self.buttongroups['buysell'], btn_name_sell, '-', {'action':'sell', 'stock': i}, self.win_market, yoff+i, xminus)
             self._add_button(self.buttongroups['buysell'], btn_name_buy, '+', {'action':'buy', 'stock': i}, self.win_market, yoff+i, xplus)
             btn_names_for_nav.append((btn_name_sell, btn_name_buy))
-            #self.buttongroups['buysell'].add_button(Button('+', {action:'buy', stock: i}), f'buy-{i}', self.win_market, yoff+i, xplus)
-            #self.add_text(self.win_market, yoff+i, xminus, '-')
-            #self.add_text(self.win_market, yoff+i, xplus, '+')
             self._add_field(f'stockowned-{i}', self.win_market, yoff+i, xowned, lenowned, initval=0, justify='>')
         for i, (btn_name_sell, btn_name_buy) in enumerate(btn_names_for_nav):
             i_next = (i+1) % len(btn_names_for_nav)
@@ -416,10 +413,10 @@ class GameBoard(object):
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'next', btn_name_buy)
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'up', f'sell-{i_prev}')
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'down', f'sell-{i_next}')
-            self.buttongroups['buysell'].set_nav(btn_name_sell, 'left', f'buy-{i_prev}')
+            #self.buttongroups['buysell'].set_nav(btn_name_sell, 'left', f'buy-{i_prev}')
             self.buttongroups['buysell'].set_nav(btn_name_sell, 'prev', f'buy-{i_prev}')
 
-            self.buttongroups['buysell'].set_nav(btn_name_buy, 'right', f'sell-{i_next}')
+            #self.buttongroups['buysell'].set_nav(btn_name_buy, 'right', f'sell-{i_next}')
             self.buttongroups['buysell'].set_nav(btn_name_buy, 'next', f'sell-{i_next}')
             self.buttongroups['buysell'].set_nav(btn_name_buy, 'up', f'buy-{i_prev}')
             self.buttongroups['buysell'].set_nav(btn_name_buy, 'down', f'buy-{i_next}')
@@ -735,9 +732,14 @@ class GameBoard(object):
 
     def buysell_approval(self, data):
         if data['approved']:
-            self.add_system_msg(f'BuySell order #{data["reqid"]} approved')
+            lst_summary = []
+            for i,(shares, cost) in enumerate(data['order']):
+                if shares != 0:
+                    lst_summary.append(f"{self.stock_names[i]} {shares:+}")
+            str_summary = ', '.join(lst_summary)
+            self.add_system_msg(f'BuySell order approved: {str_summary}')
         else:
-            self.add_system_msg(f'BuySell order #{data["reqid"]} REJECTED ({data["reject-reason"]})')
+            self.add_system_msg(f'BuySell order REJECTED: {data["reject-reason"]}')
         self.reset_pending_order()
 
     def report_div(self, i_stock, earned):
@@ -751,7 +753,9 @@ class GameBoard(object):
         for i, shares in enumerate(self.pending_order):
             curprice = self.stock_prices[i]
             order_data.append((shares, curprice))
-        return {'reqid': reqid, 'data': order_data}
+        if not all(x[0]==0 for x in order_data):
+            return {'reqid': reqid, 'data': order_data}
+        return None
 
     def nav(self, motion):
         '''
@@ -1320,7 +1324,9 @@ class KeyboardThread(threading.Thread):
             elif ckey in ('p', 'P'):
                 self.gameboard.add_system_msg('Pause requested: not implemented')
             elif ckey in ('s', 'S'):
-                self.gameboard.game_op_queue.put(game_operation('buysell', self.gameboard.buysell_operation()))
+                op_data = self.gameboard.buysell_operation()
+                if op_data: # None if no pending order
+                    self.gameboard.game_op_queue.put(game_operation('buysell', op_data))
             elif key in (curses.ascii.SP, curses.ascii.CR):
                 if not self.gameboard.active_buttongroup:
                     self.gameboard.dbg('click but no active button group')

@@ -105,6 +105,9 @@ def dbg_check_sync():
 # called by client once completed message received from server
 # TODO: any operation here that modifies shared data between
 #       gameboard and the client must be synchronized
+# NOTE/design: I don't think this function should access the gameboard
+#   directly because these messages come from the server.  The Client should
+#   have an intermediary object...
 def process_message(msgobj):
     global running
     global gameboard
@@ -119,6 +122,9 @@ def process_message(msgobj):
         running = False
     elif mtype == 'conn-accept':
         gameboard.add_system_msg("** connection to server accepted **\n")
+        # TODO: add a menu
+        gamename, gid = mdata[0]  # just one game for now
+        clientsocket.send(bmsg('join-game', (gamename, gid)))
     elif mtype == 'disconnect':
         gameboard.add_system_msg(f'[{msgobj["DATA"]} has disconnected]\n')
     elif mtype == 'joined':
@@ -126,11 +132,11 @@ def process_message(msgobj):
     elif mtype == 'server-exit':
         gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]\n')
         running = False
-    elif mtype == 'initmkt':
-        # eg. ((100, False), (175, True), etc)
-        for i, (stockval, bln_div) in enumerate(mdata):
+    elif mtype == 'initgame':
+        for i, (stockval, bln_div) in enumerate(mdata['market']):
             gameboard.update_stock_price(i, stockval, bln_div)
             market[i] = stockval
+        update_player({'cash': mdata['cash'], 'portfolio': mdata['portfolio']}, market)
     elif mtype == 'playerlist':
         # e.g. ('Fred', 'Joe',....)
         # NOTE: I dont see a need for client program to track these
@@ -150,7 +156,7 @@ def process_message(msgobj):
         market[mdata['stock']] = mdata['newprice']
         gameboard.update_stock_price(mdata['stock'], mdata['newprice'], mdata['div'])
     elif mtype == 'approve':
-        # eg {reqid: ???, approved: bln, prices: 6 actual_prices, cost: n, cash: n, portfolio: [n,n], reject-reason: str}
+        # eg {reqid: ???, approved: bln, order: ((#shares, $/share-actual),(etc..)), cost: n, cash: n, portfolio: [n,n], reject-reason: str}
         if mdata['approved']:
             update_player({'cash': mdata['cash'], 'portfolio': mdata['portfolio']}, market)
         gameboard.buysell_approval(mdata)
@@ -217,7 +223,7 @@ def process_gameboard_ops(gameboard):
         otype = op['TYPE']
         odata = op['DATA']
         if otype == 'chat-message':
-            send_chat_message(op['DATA'])
+            send_chat_message(odata)
         elif otype == 'quit':
             process_quit()
         elif otype == 'ready-start':
@@ -228,7 +234,9 @@ def process_gameboard_ops(gameboard):
                 gameboard.dbg('game start requested again')
         elif otype == 'buysell':
             # TODO: game status must be checked
-            clientsocket.send(bmsg('buysell', odata))
+            # format {reqid: str, data: ((shares, price), etc}
+            if not all(x[0]==0 for x in odata['data']):
+                clientsocket.send(bmsg('buysell', odata))
         else:
             gameboard.add_system_msg('ERROR: bad game operation type: {op["TYPE"]}')
 
