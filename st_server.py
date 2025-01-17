@@ -496,7 +496,7 @@ def process_message(message, clientname):
                         'message': chat_msg}))
         elif message['TYPE'] == 'exit':
             print (f'exit message recieved from {clientname}')
-            disconnect_client(player)
+            disconnect_client(client)
         elif message['TYPE'] == 'join-game':
             gamename, gid = mdata
             bln_success, fail_reason = process_join_request(client, gamename, gid)
@@ -600,7 +600,7 @@ while running:
                         print ("initial msg received from connecting client")
                     client_name = init_msg['DATA']
                     if client_name:
-                        if client_name in [c.name for c in clients.values()]:
+                        if client_name in clients:
                             conn.send(bmsg('error', f'Client {client_name} already connected'))
                             print (f'Connection from [{addr}] refused, {client_name} already connected')
                             validconnection = False
