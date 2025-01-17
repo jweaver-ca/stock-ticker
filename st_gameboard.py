@@ -304,6 +304,7 @@ class GameBoard(object):
             self.refresh_if(bln_refresh)
 
     def add_chat_msg(self, chatmsg):
+        #{time: isoformat.utc, playername: str, message: str}
         timestr = datetime.datetime.fromisoformat(chatmsg['time']).astimezone().strftime('%Y/%m/%d %H:%M:%S')
         strchat = f'[{timestr}] {chatmsg["playername"]}: {chatmsg["message"]}'
         self.add_system_msg(strchat)

@@ -115,7 +115,7 @@ def process_message(msgobj):
     mtype = msgobj['TYPE']
     mdata = msgobj['DATA']
     if mtype == 'chatmsg':
-        #globalscr.addstr(mdata + '\n')
+        #{time: isoformat.utc, playername: str, message: str}
         gameboard.add_chat_msg(mdata)
     elif mtype == 'error':
         gameboard.add_system_msg(f'ERROR FROM SERVER: {msgobj["DATA"]}\n')

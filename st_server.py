@@ -196,7 +196,7 @@ class StockTickerGame():
         self.name = gamename
         self.id = str(uuid.uuid4())
         self.option_ignore_nopay_divrolls = True
-        self.option_timer_seconds = 1
+        self.option_timer_seconds = 3
 
         #self.stock_names = stock_names hmm not needed
         self.market = [ self.INIT_VAL for i in range(len(stock_names)) ]
