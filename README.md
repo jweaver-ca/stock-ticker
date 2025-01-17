@@ -15,17 +15,22 @@ Clone the project.  Start the server with:
 
     $ python st_server.py
     
-You'll have to edit it to run somewhere other than localhost.
+You'll have to edit it to run somewhere other than `localhost`.
+
+The client program uses curses to draw the gameboard. Windows users will very likely
+have to install the curses library because it doesn't install on default python installs:
+
+    $ pip install windows-curses
 
 Start a client with:
 
     $ python st_client.py --name EvilMrGetty --host localhost
 
-The client program uses curses to draw the gameboard. Make sure your terminal window is
-at least 80 chars wide before running.  Many features aren't implemented yet so don't cry when the countdown
-doesn't work.
+Make sure your terminal window is
+at least 80 chars wide before running.  Many features aren't implemented yet so please don't 
+cry when the countdown doesn't work.
 
-When all clients currently joined to the game press 'R' for ready, the game will begin and the stock market
-will begin to move.
+When all clients currently joined to the game press `R` for ready, the game will begin 
+and the stock market will begin to move.
 
 There is currently no end, so also there will be no winner unless someone loses all their money...
