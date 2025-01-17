@@ -86,6 +86,17 @@ class Client:
         self._game = None
 
 class Player:
+    '''
+    Tracks the cash and holdings of a Player in a game. All methods that
+    evaluate or alter these should be called from within a section of 
+    thread-locked code.  
+    
+    Methods that are *always* expected to be called from within locked
+    section can just use game.assert_locked(). Any method that *could*
+    be called either way should provide bln_assert argument to indicate
+    if we need to assert game is locked.  (NOTE: this is all just to catch
+    bugs)
+    '''
     def __init__(self, client, cash, portfolio):
         if client.get_player():
             raise RuntimeError("Cant be a Player in 2 games")
@@ -94,10 +105,8 @@ class Player:
         self.client = client
         self.name = client.get_name()
         self.conn = client.conn # TODO: both Client and Player shouldnt need this
-        #self.portfolio = list( 0 for i in range(len(stock_names)) )
-        self.portfolio = portfolio
+        self._portfolio = [ s for s in portfolio ]
         self.game = client.game
-        # NOPE self.pending_order = [ 0 for i in range(len(stock_names)) ]
         self.id = str(uuid.uuid4())
         self.cash = cash
         self.ready_start = False
@@ -105,27 +114,53 @@ class Player:
     # cash: amount of cash changed
     # less than zeros should be avoided by application, throw errors here
     def transaction(self, stock, shares, cash):
-        self.portfolio[stock] += shares
-        if self.portfolio[stock] < 0:
-            raise ValueError('Less than zero shares')
+        # TODO: this is unused, doesn't fit vision. remove
+        self._portfolio[stock] += shares
+        if self._portfolio[stock] < 0:
+            raise ValueError('{self.name} Less than zero shares')
         self.cash += cash
         if self.cash < 0:
             raise ValueError('Less than zero cash')
     
+    def add_shares(self, stock, shares):
+        self.game.assert_locked()
+        if self._portfolio[stock] + shares < 0:
+            raise ValueError('{self.name} Less than zero shares [{stock}]')
+        self._portfolio[stock] += shares
+
+    def remove_shares(self, stock, shares):
+        self.game.assert_locked()
+        self.add_shares(stock, -shares)
+
+    def get_portfolio(self, stock=None):
+        self.game.assert_locked()
+        if stock is None:
+            return tuple(self._portfolio)
+        else:
+            return self._portfolio[stock]
+
+    def set_portfolio(self, stock, newval):
+        self.game.assert_locked()
+        self._portfolio[stock] = newval
+
+    def set_portfolio_all(self, newvals):
+        self.game.assert_locked()
+        self._portfolio = [ int(x) for x in newvals ]
+
     def summary(self):
         '''
         Summary of this player's cash, net worth and market portfolio
         for sending to client
         '''
         portfolio_val = 0
-        for i, shares in enumerate(self.portfolio):
+        for i, shares in enumerate(self._portfolio):
             price = self.game.market[i]
             portfolio_val += shares * price
         networth = self.cash + int(portfolio_val/100)
         return {
             'cash': self.cash,
             'networth': networth,
-            'portfolio': self.portfolio
+            'portfolio': self.get_portfolio()
         }
 
 class DiceRollTimer(threading.Thread):
@@ -201,7 +236,7 @@ class StockTickerGame():
         #self.stock_names = stock_names hmm not needed
         self.market = [ self.INIT_VAL for i in range(len(stock_names)) ]
         self._players = dict()
-        self.started = False # flag indicating if game underway or not
+        self.running = False # flag indicating if game underway or not
 
         #self.roll_timer = threading.Timer(self.option_timer_seconds, self.market_action)
         self.roll_timer = DiceRollTimer(self.option_timer_seconds, self.market_action)
@@ -252,7 +287,7 @@ class StockTickerGame():
         return all([p.ready_start for p in self._players.values()])
 
     def start_game(self):
-        self.started = True
+        self.running = True
         self.roll_timer.start()
 
     def die_roll(self):
@@ -268,7 +303,7 @@ class StockTickerGame():
     def init_game_info(self, playername):
         p = self._players[playername]
         return { 'cash':      p.cash,
-                 'portfolio': p.portfolio,
+                 'portfolio': p.get_portfolio(),
                  'market':    self.market_summary() }
 
     def process_order(self, player, buysell_order):
@@ -280,7 +315,7 @@ class StockTickerGame():
             'reject-reason': None
         }
         with self.game_lock:
-            new_shares_totals = [ x for x in player.portfolio ]
+            new_shares_totals = [ x for x in player.get_portfolio() ]
             for i, (shares, expected_price) in enumerate(buysell_order['data']):
                 approve_data['order'].append((shares,self.market[i]))
                 total_cents_spent += shares * self.market[i]
@@ -290,7 +325,7 @@ class StockTickerGame():
             bln_enough_shares = all((s>=0 for s in new_shares_totals)) 
             if bln_enough_cash and bln_enough_shares:
                 player.cash -= total_dollars_spent
-                player.portfolio = new_shares_totals
+                player.set_portfolio_all(new_shares_totals)
                 approve_data['cost'] = total_dollars_spent
                 bln_approved = True
             else:
@@ -307,7 +342,7 @@ class StockTickerGame():
                 bln_approved = False
             approve_data['approved'] = bln_approved
             approve_data['cash'] = player.cash
-            approve_data['portfolio'] = tuple(player.portfolio) # tuple() = thread safe
+            approve_data['portfolio'] = player.get_portfolio()
         player.conn.send(bmsg('approve', approve_data))
         
     def _process_split(self, i_stock):
@@ -317,6 +352,7 @@ class StockTickerGame():
 
         Must be called with the game_lock on.
         '''
+        self.assert_locked()
         if not self.game_lock.locked():
             # NOTE: *could* use re-entrant lock but prefer to avoid
             raise RuntimeError("Unsynchronized call")
@@ -324,15 +360,15 @@ class StockTickerGame():
         player_msgs = []
         for player in self._players.values():
             # dividend 20 paid out
-            div_dollars = int(player.portfolio[i_stock] * 0.2)
+            div_dollars = int(player.get_portfolio(i_stock) * 0.2)
             player.cash += div_dollars
-            shares_gained = player.portfolio[i_stock]
-            player.portfolio[i_stock] += shares_gained
+            shares_gained = player.get_portfolio(i_stock)
+            player.add_shares(i_stock, shares_gained)
             split_msg_data = {
                 'stock': i_stock,
                 'newprice': self.INIT_VAL,
                 'div': self.INIT_VAL >= self.DIV_VAL, # always no after split
-                'shares': player.portfolio[i_stock],
+                'shares': player.get_portfolio(i_stock),
                 'gained': shares_gained,
                 'divpaid': div_dollars,
                 'playercash': player.cash
@@ -348,13 +384,12 @@ class StockTickerGame():
 
         Must be called with the game_lock on.
         '''
-        if not self.game_lock.locked():
-            raise RuntimeError("Unsynchronized call")
+        self.assert_locked()
 
         player_msgs = []
         for player in self._players.values():
-            shares_lost = player.portfolio[i_stock]
-            player.portfolio[i_stock] = 0
+            shares_lost = player.get_portfolio(i_stock)
+            player.set_portfolio(i_stock, 0)
             bust_msg_data = {
                 'stock': i_stock,
                 'newprice': self.INIT_VAL,
@@ -403,7 +438,7 @@ class StockTickerGame():
                     player_msgs.extend(split_bust_msgs)
             if action == 'DIV' and self.pays_dividend(stock):
                 for player in self._players.values():
-                    div_dollars = int(player.portfolio[stock] * amount/100)
+                    div_dollars = int(player.get_portfolio(stock) * amount/100)
                     if div_dollars:
                         player.cash += div_dollars
                         div_msg_data = {
@@ -418,19 +453,21 @@ class StockTickerGame():
             p.conn.send(m)
 
     def pays_dividend(self, i_stock):
-        if not self.game_lock.locked():
-            raise RuntimeError("Unsynchronized call")
+        self.assert_locked()
         return self.market[i_stock] >= self.DIV_VAL
 
     def roll_div_unpaid(self, roll):
         ''' returns True IFF action is 'DIV' but stock doesn't pay '''
-        if not self.game_lock.locked():
-            raise RuntimeError("Unsynchronized call")
+        self.assert_locked()
         return roll['action'] == 'DIV' and not self.pays_dividend(roll['stock'])
+
+    def assert_locked(self):
+        if self.running and not self.game_lock.locked():
+            raise RuntimeError("Game is not locked")
 
     def status(self):
         # NOTE: may add more details (e.g. paused,etc?), so using dictionary even though just 1 item...
-        return {'started': self.started}
+        return {'started': self.running}
 
 # -- end class StockTickerGame
 

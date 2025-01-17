@@ -1,0 +1,11 @@
+SERVER
+- Player.portfolio added functions for reading/changing.
+- added game-lock assertions to player read/write functions
+
+CLIENT
+
+
+GAMEBOARD
+
+
+MISC
