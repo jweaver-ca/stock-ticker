@@ -12,10 +12,13 @@ TODO: Decide if Messages have 2 distinct types or not:
 SENT
 BY      TYPE        MEANING                         DATA
 -----   ----------  -------------------             ----------------------------------------
+n/a     MSG-ERROR   MessageReceiver failed decode   kill the connection, messages malformed
 C       initconn    Clients first message to srv    Client name
 C       reconn      Reconnect request               {name: XX, id: XX}
 C       msg         Cli chat message                string with chat message contents
 C       exit        Alert client exit               n/a
+C       join-game   Request to join a game          
+C       ready-start Signal ready for game start
  S      conn-accept Server accepted                 {id: XX}
  S      chatmsg     Chat Message                    {time: isoformat.utc, playername: str, message: str}
  S      error       Server couldnt process msg      error details
@@ -28,9 +31,10 @@ C       exit        Alert client exit               n/a
 CS      start       Start game/alert game started   n/a
  S      buysell     Buy/Sell stock                  {reqid: ???, data: [ (shares, purchprice), etc 500, -1500, 0 ...]} 
 C       pause       Pause market briefly            n/a
- S      initmkt     Markets initial status          (all stock prices), simple list of 6 2-tuple (price, bln_div) [(100, False), (105, True)...etc
- S      player      Player's status                 {cash: n, portfolio: [0, 500, 0... etc]}
- S      approve     Approval of buy/sell            {reqid: ???, approved: bln, 'prices': 6 actual_prices, 'cost': n, 'cash': n, 'portfolio': 6 shares, 'reject-reason': str}
+ S      initgame    Player and Market start info    {cash: n, portfolio: [0, 500, 0... etc], market: ((price,div),(price,div),...)}
+ S      joinfail    Server refused request to join  {'reason': str}
+ S      player      Player's cash & holdings        {cash: n, portfolio: [0, 500, 0... etc]}
+ S      approve     Approval of buy/sell            {reqid: ???, approved: bln, order: ((shares, cost), etc), 'cost': n, 'cash': n, 'portfolio': 6 shares, 'reject-reason': str}
  S      trades      Summary of trades               (not sure data yet)
  S      actiontime  Market action coming soon       seconds
  S      roll        Results of die roll             {stock: #, action: 'UP'etc, amount: int}

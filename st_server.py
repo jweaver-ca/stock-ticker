@@ -492,7 +492,7 @@ def process_message(message, clientname):
             chat_msg = message['DATA']
             #send_all(bmsg('chatmsg', f'[{datetime.datetime.now()}] {clientname}: {chat_msg}'))
             send_all(bmsg('chatmsg', {'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                        'player.name': clientname,
+                        'playername': clientname,
                         'message': chat_msg}))
         elif message['TYPE'] == 'exit':
             print (f'exit message recieved from {clientname}')
@@ -616,9 +616,6 @@ while running:
                     # send list of game names
                     # TODO: only list games that are joinable/not started
                     conn.send(bmsg('conn-accept', tuple((g.name,g.id) for g in games.values())))
-                    print (f'[{client_name}] has joined. {len(clients)} total clients')
-
-                    # TODO: at this point, server should until client is ready
                     print (f'[{client_name}] has joined. {len(clients)} total clients')
                 else:
                     conn.close()
