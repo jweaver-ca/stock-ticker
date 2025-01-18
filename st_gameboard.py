@@ -606,6 +606,7 @@ class GameBoard(object):
     def get_coord(self, name):
         return self.coords[name]
 
+    # TODO, allow newval to have escape sequences
     def update_field(self, name, newval, attr=0, bln_refresh=True):
         # Field.update returns the curses.addstr args so GameBoard can draw
         addstr_args = self.fields[name].update(newval, attr, bln_refresh)
