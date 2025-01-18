@@ -13,6 +13,7 @@
 # TODO: .bind localhost <-- need to change for actual network comms to work?
 # TODO: handle mutliple rooms, for now just one room for all
 
+import argparse
 import socket
 #import threading
 import selectors
@@ -26,6 +27,14 @@ import time
 import uuid
 import types # SimpleNamespace for stock enum-ish construct?
 from st_common import MessageReceiver
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-t", "--timersec", type=int, required=False, default=3, help="Default seconds between die rolls")
+args = parser.parse_args() 
+
+SERVER_OPT = {
+    'timersec': args.timersec
+}
 
 # ------------------------------------------------------------------------------
 #                              SYNCHRONIZATION NOTES
@@ -231,7 +240,7 @@ class StockTickerGame():
         self.name = gamename
         self.id = str(uuid.uuid4())
         self.option_ignore_nopay_divrolls = True
-        self.option_timer_seconds = 3
+        self.option_timer_seconds = SERVER_OPT['timersec']
 
         #self.stock_names = stock_names hmm not needed
         self.market = [ self.INIT_VAL for i in range(len(stock_names)) ]

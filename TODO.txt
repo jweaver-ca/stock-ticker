@@ -1,3 +1,6 @@
+- implement a system of allowing multi-colored strings (escape sequences) in label updates, messages etc
+- client/server. allow "/cmd args" type messages from clients for system options
+- program a time/$ limit ending and announce winner
 - client/server. add sync checks (e.g. is cash/holdings the same?) between client/server to detect bugs
 - gameboard. if block_size > owned, allow it to go to zero
 - gameboard. see if clearing first can help request to redraw screen
@@ -19,3 +22,5 @@
 - gameboard and client should ignore attempt to submit empty order
 - lleft/right arrow keys should not change rows in buysell buttongroup
 - buysell approval should not print reqid, should print summary
+- gameboard. ScrollArea should use a curses window
+- server. Allow some game options on command line

@@ -1039,14 +1039,17 @@ class Field(object):
     def set_curses_attr_rules(self, fn_rules):
         self.fn_curses_attr = fn_rules
 
-class ScrollArea(object):
+class ScrollArea():
     '''
     Simple upwards scroll area (starts at bottom)
     Lines are split according to width of the given window
     '''
-    def __init__(self, scr, window, drawlock, offset=None):
+    # I dont like giving win and cwin but
+    # win: is for initial drawing following the paradigm of other gameboard parts
+    # parent_cwin: is required to actually draw and call derwin, whereas Window types aren't
+    #    conclusion: need both for now, unless we rethink everything
+    def __init__(self, parent_cwin, win, drawlock, offset=None):
         '''
-        scr: curses window (from GameBoard)
         window: Window where this will go
         offset: tuple (left,up,right,down), if not given, all zeros (whole window)
         drawlock: drawing lock provided by GameBoard to synchronize drawing
@@ -1056,28 +1059,29 @@ class ScrollArea(object):
         # make sure offset is legal for window size
         if any([x<0 for x in offset]):
             raise ValueError(f"bad offset [{offset}]")
-        thiswidth = window.width - (offset[0]+offset[2])
-        thisheight = window.height - (offset[1]+offset[3])
+        thisheight = win.height - (offset[1]+offset[3])
+        thiswidth = win.width - (offset[0]+offset[2])
+        self.width = thiswidth
+        thisy, thisx = win.uly + offset[1], win.ulx + offset[0]
         if (thiswidth < 0) or (thisheight < 0):
             raise ValueError(f"offset is too large for window [{offset}]")
-        self.messages = []
-        self.scr = scr
         self.drawlock = drawlock
-        self.window = Window(window.uly+offset[1], window.ulx+offset[0], thisheight, thiswidth)
-        self.firsty = self.window.uly + self.window.height # bottom line (first)
+        #self.window = Window(window.uly+offset[1], window.ulx+offset[0], thisheight, thiswidth)
+        self.cwin = parent_cwin.subwin(thisheight, thiswidth, thisy, thisx)
+        self.BY = thisheight-1
+        self.cwin.scrollok(True)
+        self.maxy, self.maxx = self.cwin.getmaxyx()
 
-
-    def add_message(self, str_message):
+    def add_message(self, str_message, attr=curses.A_NORMAL):
         #TODO: find a better/efficient way to clear lines besides formatting the string to fill with spaces on the right
         #      mostly its just confusing why this formatting is done...
-        lst_msg = [ f"{x:<{self.window.width}}" for x in textwrap.wrap(str_message,width=self.window.width)][::-1]
-        self.messages = lst_msg + self.messages[:self.window.height-len(lst_msg)]
+        lst_msg = textwrap.wrap(str_message,width=self.width)
         with self.drawlock:
-            for i in range(len(self.messages)):
-                #index = len(self.messages) - 1 - i
-                y = self.window.uly + self.window.height - i - 1
-                self.scr.addstr(y, self.window.ulx, self.messages[i])
-            self.scr.refresh()
+            self.cwin.scroll()
+            for i, msgpart in enumerate(lst_msg):
+                y = self.BY + 1 - len(lst_msg) + i
+                self.cwin.addstr(y, 0, lst_msg[i], attr)
+            self.cwin.refresh()
             
 class Dialog():
     '''
