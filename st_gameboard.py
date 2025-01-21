@@ -7,6 +7,8 @@ import curses.ascii
 import textwrap
 import traceback # I need to print debug logs if exception raised, but also see exception details
 
+from color_processor import ColorProcessor
+
 # for debugging only. remove when done with it
 lst_log = []
 def log(msg):
@@ -115,6 +117,9 @@ class GameBoard(object):
 
         self.init_curses_color(1, "RED", curses.COLOR_RED)
         self.init_curses_color(2, "GREEN", curses.COLOR_GREEN)
+        self.init_curses_color(3, "YELLOW", curses.COLOR_YELLOW)
+        self.init_curses_color(4, "WHITE", curses.COLOR_WHITE)
+        self.color_processor = ColorProcessor()
 
         self.scr.clear()
 
@@ -158,7 +163,7 @@ class GameBoard(object):
         # sysmsg - system/game/chat messages
         height_sysmsg = self.win_chatmsg.TY()-self.win_market.BY()-3
         self.win_sysmsg = Window(self.win_market.BY()+2, self.win_main.LX(), height_sysmsg, self.win_main.width) 
-        self.sa_sysmsg = ScrollArea(self.scr, self.win_sysmsg, self.drawlock)
+        self.sa_sysmsg = ScrollArea(self.scr, self.win_sysmsg, self.drawlock, self.color_processor)
 
         dict_border_cells = dict() # key = tuple (y,x), value = 
         GameBoard.apply_border(self.win_main, dict_border_cells)
@@ -481,7 +486,7 @@ class GameBoard(object):
         win.draw_hline(dict_border_cells, xlowline)
         self.add_text(win, -2, 0, str_next_action, win.width, justify='^')
         # TODO: ScrollAreas, like labels maybe should be accessible by a name??
-        self.sa_mkt_act = ScrollArea(self.scr, self.win_mkt_act, self.drawlock, offset=(1,2,1,3))
+        self.sa_mkt_act = ScrollArea(self.scr, self.win_mkt_act, self.drawlock, self.color_processor, offset=(1,2,1,3))
         self._add_field('next-action', win, win.height-1, 1, win.width-2, justify='^', initval="00:00.0")
 
         
@@ -659,8 +664,14 @@ class GameBoard(object):
         return msg
 
     def display_die_roll(self, roll_data, bln_refresh=True):
+        color = 3
+        if roll_data["action"] == "UP":
+            color = 2
+        elif roll_data["action"] == "DOWN":
+            color = 1
+            
         with self.drawlock:
-            self.sa_mkt_act.add_message(f'{self.stock_names[roll_data["stock"]]} {roll_data["action"]} {roll_data["amount"]}')
+            self.sa_mkt_act.add_message(f'{self.stock_names[roll_data["stock"]]} <c:{color}>{roll_data["action"]}</c> {roll_data["amount"]}')
             self.refresh_if(bln_refresh)
 
     def display_split_message(self, split_data, bln_refresh=True):
@@ -1049,7 +1060,7 @@ class ScrollArea():
     # win: is for initial drawing following the paradigm of other gameboard parts
     # parent_cwin: is required to actually draw and call derwin, whereas Window types aren't
     #    conclusion: need both for now, unless we rethink everything
-    def __init__(self, parent_cwin, win, drawlock, offset=None):
+    def __init__(self, parent_cwin, win, drawlock, color_processor=None, offset=None):
         '''
         window: Window where this will go
         offset: tuple (left,up,right,down), if not given, all zeros (whole window)
@@ -1067,6 +1078,7 @@ class ScrollArea():
         if (thiswidth < 0) or (thisheight < 0):
             raise ValueError(f"offset is too large for window [{offset}]")
         self.drawlock = drawlock
+        self.color_processor = color_processor
         #self.window = Window(window.uly+offset[1], window.ulx+offset[0], thisheight, thiswidth)
         self.cwin = parent_cwin.subwin(thisheight, thiswidth, thisy, thisx)
         self.BY = thisheight-1
@@ -1076,12 +1088,17 @@ class ScrollArea():
     def add_message(self, str_message, attr=curses.A_NORMAL):
         #TODO: find a better/efficient way to clear lines besides formatting the string to fill with spaces on the right
         #      mostly its just confusing why this formatting is done...
-        lst_msg = textwrap.wrap(str_message,width=self.width)
+        #lst_msg = textwrap.wrap(str_message,width=self.width)
+        lst_color_msg = self.color_processor.process_colors(str_message, width=self.width)
         with self.drawlock:
-            self.cwin.scroll()
-            for i, msgpart in enumerate(lst_msg):
-                y = self.BY + 1 - len(lst_msg) + i
-                self.cwin.addstr(y, 0, lst_msg[i], attr)
+            self.cwin.scroll(len(lst_color_msg))
+            for i, msgpart in enumerate(lst_color_msg):
+                y = self.BY + 1 - len(lst_color_msg) + i
+                #self.cwin.addstr(y, 0, lst_msg[i], attr)
+                for (x, str_subpart, attr) in msgpart:
+                    if attr is None:
+                        attr = curses.A_NORMAL
+                    self.cwin.addstr(y, x, str_subpart, attr)
             self.cwin.refresh()
             
 class Dialog():
