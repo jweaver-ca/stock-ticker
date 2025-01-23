@@ -1,0 +1,14 @@
+SERVER
+- Player.portfolio added functions for reading/changing.
+- added game-lock assertions to player read/write functions
+- ScrollArea switched to native curses scrolling
+- Server program args and SERVER_OPT options added
+
+CLIENT
+
+
+GAMEBOARD
+- ColorProcessor added for ScrollArea
+
+
+MISC

@@ -7,6 +7,8 @@ import curses.ascii
 import textwrap
 import traceback # I need to print debug logs if exception raised, but also see exception details
 
+from color_processor import ColorProcessor
+
 # for debugging only. remove when done with it
 lst_log = []
 def log(msg):
@@ -115,6 +117,9 @@ class GameBoard(object):
 
         self.init_curses_color(1, "RED", curses.COLOR_RED)
         self.init_curses_color(2, "GREEN", curses.COLOR_GREEN)
+        self.init_curses_color(3, "YELLOW", curses.COLOR_YELLOW)
+        self.init_curses_color(4, "WHITE", curses.COLOR_WHITE)
+        self.color_processor = ColorProcessor()
 
         self.scr.clear()
 
@@ -158,7 +163,7 @@ class GameBoard(object):
         # sysmsg - system/game/chat messages
         height_sysmsg = self.win_chatmsg.TY()-self.win_market.BY()-3
         self.win_sysmsg = Window(self.win_market.BY()+2, self.win_main.LX(), height_sysmsg, self.win_main.width) 
-        self.sa_sysmsg = ScrollArea(self.scr, self.win_sysmsg, self.drawlock)
+        self.sa_sysmsg = ScrollArea(self.scr, self.win_sysmsg, self.drawlock, self.color_processor)
 
         dict_border_cells = dict() # key = tuple (y,x), value = 
         GameBoard.apply_border(self.win_main, dict_border_cells)
@@ -481,7 +486,7 @@ class GameBoard(object):
         win.draw_hline(dict_border_cells, xlowline)
         self.add_text(win, -2, 0, str_next_action, win.width, justify='^')
         # TODO: ScrollAreas, like labels maybe should be accessible by a name??
-        self.sa_mkt_act = ScrollArea(self.scr, self.win_mkt_act, self.drawlock, offset=(1,2,1,3))
+        self.sa_mkt_act = ScrollArea(self.scr, self.win_mkt_act, self.drawlock, self.color_processor, offset=(1,2,1,3))
         self._add_field('next-action', win, win.height-1, 1, win.width-2, justify='^', initval="00:00.0")
 
         
@@ -606,6 +611,7 @@ class GameBoard(object):
     def get_coord(self, name):
         return self.coords[name]
 
+    # TODO, allow newval to have escape sequences
     def update_field(self, name, newval, attr=0, bln_refresh=True):
         # Field.update returns the curses.addstr args so GameBoard can draw
         addstr_args = self.fields[name].update(newval, attr, bln_refresh)
@@ -640,8 +646,8 @@ class GameBoard(object):
                     self.scr.addstr(btn.y, btn.x, btn.label)
             self.scr.refresh()
 
-    def read_str(curses_win):
-        # NOTE: this is a static method
+    def read_str(self, curses_win):
+        # NOTE: this is a static method (testing it so that it is...)
         '''
         Just a wrapper to handle curses echoing, showing cursor etc while reading in a
         string from the user
@@ -649,17 +655,24 @@ class GameBoard(object):
         curses.echo()
         curses.curs_set(1)
         msg = curses_win.getstr()
-        curses_win.erase()
-        curses.curs_set(0)
-        curses.noecho()
-        # NOTE: refresh required to clear out the contents and hide the cursor, etc
-        curses_win.refresh()
+        with self.drawlock:
+            curses_win.erase()
+            curses.curs_set(0)
+            curses.noecho()
+            # NOTE: refresh required to clear out the contents and hide the cursor, etc
+            curses_win.refresh()
         
         return msg
 
     def display_die_roll(self, roll_data, bln_refresh=True):
+        color = 3
+        if roll_data["action"] == "UP":
+            color = 2
+        elif roll_data["action"] == "DOWN":
+            color = 1
+            
         with self.drawlock:
-            self.sa_mkt_act.add_message(f'{self.stock_names[roll_data["stock"]]} {roll_data["action"]} {roll_data["amount"]}')
+            self.sa_mkt_act.add_message(f'{self.stock_names[roll_data["stock"]]} <c:{color}>{roll_data["action"]}</c> {roll_data["amount"]}')
             self.refresh_if(bln_refresh)
 
     def display_split_message(self, split_data, bln_refresh=True):
@@ -679,12 +692,12 @@ class GameBoard(object):
     def input_chat_message(self):
         # NOTE: getstr really has to go in a curses window proper, else the entry
         #   ruins stuff to the right that's in the same window
-        chat_msg = GameBoard.read_str(self.cwin_chatmsg_in).decode('utf-8')
+        chat_msg = self.read_str(self.cwin_chatmsg_in).decode('utf-8')
         # NOTE/TODO: adding redrawwin call here to see if it helps with an issue noticed
         #   after sending a message and the screen goes wonky.
         #   if this doesn't fix it, the call should be removed
-        self.scr.redrawwin()
-        return chat_msg
+        #self.scr.redrawwin()
+        return chat_msg.rstrip()
         # TODO: actually send the dang message
 
     def pending_order_cost(self):
@@ -1039,14 +1052,17 @@ class Field(object):
     def set_curses_attr_rules(self, fn_rules):
         self.fn_curses_attr = fn_rules
 
-class ScrollArea(object):
+class ScrollArea():
     '''
     Simple upwards scroll area (starts at bottom)
     Lines are split according to width of the given window
     '''
-    def __init__(self, scr, window, drawlock, offset=None):
+    # I dont like giving win and cwin but
+    # win: is for initial drawing following the paradigm of other gameboard parts
+    # parent_cwin: is required to actually draw and call derwin, whereas Window types aren't
+    #    conclusion: need both for now, unless we rethink everything
+    def __init__(self, parent_cwin, win, drawlock, color_processor=None, offset=None):
         '''
-        scr: curses window (from GameBoard)
         window: Window where this will go
         offset: tuple (left,up,right,down), if not given, all zeros (whole window)
         drawlock: drawing lock provided by GameBoard to synchronize drawing
@@ -1056,28 +1072,36 @@ class ScrollArea(object):
         # make sure offset is legal for window size
         if any([x<0 for x in offset]):
             raise ValueError(f"bad offset [{offset}]")
-        thiswidth = window.width - (offset[0]+offset[2])
-        thisheight = window.height - (offset[1]+offset[3])
+        thisheight = win.height - (offset[1]+offset[3])
+        thiswidth = win.width - (offset[0]+offset[2])
+        self.width = thiswidth
+        thisy, thisx = win.uly + offset[1], win.ulx + offset[0]
         if (thiswidth < 0) or (thisheight < 0):
             raise ValueError(f"offset is too large for window [{offset}]")
-        self.messages = []
-        self.scr = scr
         self.drawlock = drawlock
-        self.window = Window(window.uly+offset[1], window.ulx+offset[0], thisheight, thiswidth)
-        self.firsty = self.window.uly + self.window.height # bottom line (first)
+        self.color_processor = color_processor
+        #self.window = Window(window.uly+offset[1], window.ulx+offset[0], thisheight, thiswidth)
+        self.cwin = parent_cwin.subwin(thisheight, thiswidth, thisy, thisx)
+        self.BY = thisheight-1
+        self.cwin.scrollok(True)
+        self.maxy, self.maxx = self.cwin.getmaxyx()
 
-
-    def add_message(self, str_message):
+    def add_message(self, str_message, attr=curses.A_NORMAL):
         #TODO: find a better/efficient way to clear lines besides formatting the string to fill with spaces on the right
         #      mostly its just confusing why this formatting is done...
-        lst_msg = [ f"{x:<{self.window.width}}" for x in textwrap.wrap(str_message,width=self.window.width)][::-1]
-        self.messages = lst_msg + self.messages[:self.window.height-len(lst_msg)]
+        #lst_msg = textwrap.wrap(str_message,width=self.width)
+        lst_color_msg = self.color_processor.process_colors(str_message, width=self.width)
+        print (lst_color_msg)
         with self.drawlock:
-            for i in range(len(self.messages)):
-                #index = len(self.messages) - 1 - i
-                y = self.window.uly + self.window.height - i - 1
-                self.scr.addstr(y, self.window.ulx, self.messages[i])
-            self.scr.refresh()
+            self.cwin.scroll(len(lst_color_msg))
+            for i, msgpart in enumerate(lst_color_msg):
+                y = self.BY + 1 - len(lst_color_msg) + i
+                #self.cwin.addstr(y, 0, lst_msg[i], attr)
+                for (x, str_subpart, attr) in msgpart:
+                    if attr is None:
+                        attr = curses.A_NORMAL
+                    self.cwin.addstr(y, x, str_subpart, attr)
+            self.cwin.refresh()
             
 class Dialog():
     '''
@@ -1315,9 +1339,9 @@ class KeyboardThread(threading.Thread):
                     self.gameboard.game_op_queue.put(game_operation('chat-message', str_msg))
             elif ckey in ('f', 'F'):
                 self.gameboard.add_system_msg('redraw requested')
-                self.gameboard.redraw()
-                self.gameboard.scr.refresh()
-                curses.doupdate()
+               #self.gameboard.redraw()
+               #self.gameboard.scr.refresh()
+               #curses.doupdate()
             elif ckey in ('r', 'R'):
                 # request to start game (basically "I'm ready" message to server)
                 self.gameboard.game_op_queue.put(game_operation('ready-start', None))
