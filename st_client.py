@@ -118,19 +118,19 @@ def process_message(msgobj):
         #{time: isoformat.utc, playername: str, message: str}
         gameboard.add_chat_msg(mdata)
     elif mtype == 'error':
-        gameboard.add_system_msg(f'ERROR FROM SERVER: {msgobj["DATA"]}\n')
+        gameboard.add_system_msg(f'ERROR FROM SERVER: {msgobj["DATA"]}')
         running = False
     elif mtype == 'conn-accept':
-        gameboard.add_system_msg("** connection to server accepted **\n")
+        gameboard.add_system_msg("** connection to server accepted **")
         # TODO: add a menu
         gamename, gid = mdata[0]  # just one game for now
         clientsocket.send(bmsg('join-game', (gamename, gid)))
     elif mtype == 'disconnect':
-        gameboard.add_system_msg(f'[{msgobj["DATA"]} has disconnected]\n')
+        gameboard.add_system_msg(f'[{msgobj["DATA"]} has disconnected]')
     elif mtype == 'joined':
-        gameboard.add_system_msg(f'[{msgobj["DATA"]} has joined]\n')
+        gameboard.add_system_msg(f'[{msgobj["DATA"]} has joined]')
     elif mtype == 'server-exit':
-        gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]\n')
+        gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]')
         running = False
     elif mtype == 'initgame':
         for i, (stockval, bln_div) in enumerate(mdata['market']):

@@ -17,9 +17,13 @@ import re
 import textwrap
 
 class ColorProcessor():
-    def __init__(self):
-        self.re_escape = re.compile(r'<c:(\d+)([a-z]*)>')
+    def __init__(self, color_names=None):
+        self.re_escape = re.compile(r'<c:(\d+|[A-Z]+)([a-z]*)>')
         self.end_flag = "</c>"
+        if color_names is None:
+            self.color_name_map = dict()
+        else:
+            self.color_name_map = color_names
 
     def process_colors(self, str_value, width=None, start_attr=None):
         retval = []
@@ -34,7 +38,8 @@ class ColorProcessor():
             # i_end: index of start of '</c>'
             #        - attr is None means not processing a tag, so not looking for it
             #        - if not found at all, pretend it's the end of the string
-            i_end = len(tmp_str_value)+1 if curr_attr is None else tmp_str_value.find(self.end_flag)
+            #i_end = len(tmp_str_value)+1 if curr_attr is None else tmp_str_value.find(self.end_flag)
+            i_end = tmp_str_value.find(self.end_flag)
             if m := self.re_escape.search(tmp_str_value):
                 i_nextstart = m.start()
             else:
@@ -42,36 +47,47 @@ class ColorProcessor():
             if i_end == -1 and i_nextstart == -1:
                 # neither was found, end it
                 retval.append((curr_x, tmp_str_value, curr_attr))
-                return retval
-            # exclude any -1 values from min()
-            minargs = (i for i in (i_end, i_nextstart) if i > -1)
-            i = min(minargs)
-            #print (f"{tmp_str_value}\n  {i=} {i_end=} {i_nextstart=}")
-            if i == i_end:
-                # currently might have an attribute and found an end flag
-                retval.append((curr_x, tmp_str_value[0:i], curr_attr))
-                tmp_str_value = tmp_str_value[i_end+len(self.end_flag):]
-                curr_x += i
-                curr_attr = None
-            elif i == i_nextstart:
-                if i > 0:
-                    retval.append((curr_x, tmp_str_value[0:i], curr_attr))
-                    tmp_str_value = tmp_str_value[m.start():]
-                else:
-                    pair_num = int(m.group(1))
-                    curr_attr = curses.color_pair(pair_num)
-                    tmp_str_value = tmp_str_value[m.end():]
-                    if m.lastindex > 1: # has modifiers e.g. "r"
-                        # for loop in case we add more modifiers one day
-                        for modifier in m.group(2):
-                            if modifier == 'r':
-                                curr_attr |= curses.A_REVERSE
-                            #elif: etc, in future
-                            else:
-                                raise ValueError(f"bad modifier {modifier} in {str_value}")
-                curr_x += i
+                tmp_str_value = ""
+                #return retval
             else:
-                raise ValueError("didnt expect to get here")
+                # exclude any -1 values from min()
+                minargs = (i for i in (i_end, i_nextstart) if i > -1)
+                i = min(minargs)
+                #print (f"{tmp_str_value}\n  {i=} {i_end=} {i_nextstart=}")
+                if i == i_end:
+                    # currently might have an attribute and found an end flag
+                    retval.append((curr_x, tmp_str_value[0:i], curr_attr))
+                    tmp_str_value = tmp_str_value[i_end+len(self.end_flag):]
+                    curr_x += i
+                    curr_attr = None
+                elif i == i_nextstart:
+                    if i > 0:
+                        retval.append((curr_x, tmp_str_value[0:i], curr_attr))
+                        tmp_str_value = tmp_str_value[m.start():]
+                    else:
+                        pair_id = m.group(1)
+                        if pair_id in self.color_name_map:
+                            curr_attr = self.color_name_map[pair_id]
+                        else:
+                            try:
+                                curr_attr = curses.color_pair(int(pair_id))
+                            except:
+                                curr_attr = None # ignore bad value
+                        tmp_str_value = tmp_str_value[m.end():]
+                        if curr_attr is not None:
+                            if m.lastindex > 1: # has modifiers e.g. "r"
+                                # for loop in case we add more modifiers one day
+                                for modifier in m.group(2):
+                                    if modifier == 'r':
+                                        curr_attr |= curses.A_REVERSE
+                                    #elif: etc, in future
+                                    else:
+                                        # ignore bad modifiers. dont want to crash program when someone types a bad chat message
+                                        #raise ValueError(f"bad modifier {modifier} in {str_value}")
+                                        pass
+                    curr_x += i
+                else:
+                    raise ValueError("didnt expect to get here")
             if tmp_str_value == str_value_init:
                 raise ValueError(f'no change: {str_value=}')
         if width is not None:
@@ -194,6 +210,8 @@ def main(stdscr):
             bln_anyfailures = True
     if bln_anyfailures:
         print ("THERE WERE FAILURES")
+
+    print (cp.process_colors('here is a test', width=50))
 
 if __name__ == '__main__':    
     curses.wrapper(main)

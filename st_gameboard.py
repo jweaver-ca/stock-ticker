@@ -646,8 +646,8 @@ class GameBoard(object):
                     self.scr.addstr(btn.y, btn.x, btn.label)
             self.scr.refresh()
 
-    def read_str(curses_win):
-        # NOTE: this is a static method
+    def read_str(self, curses_win):
+        # NOTE: this is a static method (testing it so that it is...)
         '''
         Just a wrapper to handle curses echoing, showing cursor etc while reading in a
         string from the user
@@ -655,11 +655,12 @@ class GameBoard(object):
         curses.echo()
         curses.curs_set(1)
         msg = curses_win.getstr()
-        curses_win.erase()
-        curses.curs_set(0)
-        curses.noecho()
-        # NOTE: refresh required to clear out the contents and hide the cursor, etc
-        curses_win.refresh()
+        with self.drawlock:
+            curses_win.erase()
+            curses.curs_set(0)
+            curses.noecho()
+            # NOTE: refresh required to clear out the contents and hide the cursor, etc
+            curses_win.refresh()
         
         return msg
 
@@ -691,12 +692,12 @@ class GameBoard(object):
     def input_chat_message(self):
         # NOTE: getstr really has to go in a curses window proper, else the entry
         #   ruins stuff to the right that's in the same window
-        chat_msg = GameBoard.read_str(self.cwin_chatmsg_in).decode('utf-8')
+        chat_msg = self.read_str(self.cwin_chatmsg_in).decode('utf-8')
         # NOTE/TODO: adding redrawwin call here to see if it helps with an issue noticed
         #   after sending a message and the screen goes wonky.
         #   if this doesn't fix it, the call should be removed
-        self.scr.redrawwin()
-        return chat_msg
+        #self.scr.redrawwin()
+        return chat_msg.rstrip()
         # TODO: actually send the dang message
 
     def pending_order_cost(self):
@@ -1090,6 +1091,7 @@ class ScrollArea():
         #      mostly its just confusing why this formatting is done...
         #lst_msg = textwrap.wrap(str_message,width=self.width)
         lst_color_msg = self.color_processor.process_colors(str_message, width=self.width)
+        print (lst_color_msg)
         with self.drawlock:
             self.cwin.scroll(len(lst_color_msg))
             for i, msgpart in enumerate(lst_color_msg):
@@ -1337,9 +1339,9 @@ class KeyboardThread(threading.Thread):
                     self.gameboard.game_op_queue.put(game_operation('chat-message', str_msg))
             elif ckey in ('f', 'F'):
                 self.gameboard.add_system_msg('redraw requested')
-                self.gameboard.redraw()
-                self.gameboard.scr.refresh()
-                curses.doupdate()
+               #self.gameboard.redraw()
+               #self.gameboard.scr.refresh()
+               #curses.doupdate()
             elif ckey in ('r', 'R'):
                 # request to start game (basically "I'm ready" message to server)
                 self.gameboard.game_op_queue.put(game_operation('ready-start', None))
