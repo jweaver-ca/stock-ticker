@@ -56,8 +56,8 @@ SERVER_OPT = {
 # started before the previous game action is complete.  A DiceRollTimer tick does
 # not run its action on a separate thread so this happens naturally.
 
-stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
-stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
+stock = types.SimpleNamespace(GOLD=1,SILVER=2,OIL=3,BONDS=4,INDUSTRIAL=5,GRAIN=6)
+stock_names = [ 'GOLD', 'SILVER', 'OIL', 'BONDS', 'INDUSTRIAL', 'GRAIN' ]
 
 sel = selectors.DefaultSelector()
 

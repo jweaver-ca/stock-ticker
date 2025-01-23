@@ -1,8 +1,7 @@
 - client/server. allow "/cmd args" type messages from clients for system options
 - program a time/$ limit ending and announce winner
 - client/server. add sync checks (e.g. is cash/holdings the same?) between client/server to detect bugs
-- gameboard. if block_size > owned, allow it to go to zero
-- gameboard. see if clearing first can help request to redraw screen
+- gameboard. if block_size > owned, allow pending to go to zero
 	It doesn't look it. I think the artifacts become part of the screen data
 	by accident and only by specific call to redraw those areas how they are
 	supposed to be will fix.  Or erase whole screen and re-draw all windows.
@@ -14,6 +13,10 @@
 - client. on start, get name if not provided (no curses?), check server, then start curses
 - client. enable [, ] buttons to raise/lower buysell block size
 - client. update status to include game name once joined
+- have stock names in only ONE place (server)
+- change countdown timer to the game timer (no need for roll timer display)
+- when player joins, update label at top with player names for existing players
+- when blocksz changes, update all $/BLOCK listings immediately
 
 --------------------------------------------------------------------------------
   DONE
@@ -24,3 +27,4 @@
 - gameboard. ScrollArea should use a curses window
 - server. Allow some game options on command line
 - implement a system of allowing multi-colored strings (escape sequences) in label updates, messages etc
+- gameboard. see if clearing first can help request to redraw screen (ANSWER: NO)

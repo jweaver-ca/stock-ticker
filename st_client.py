@@ -48,8 +48,8 @@ INIT_VAL = 100  # price each stock starts at
 
 # Could use Enum.. no real need I think...
 # TODO: decide if simplenamespace or just a plain old array of string for stocks...
-stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
-stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
+stock_names = [ 'GOLD', 'SILVER', 'OIL', 'BONDS', 'INDUSTRIAL', 'GRAIN' ]
+stock = types.SimpleNamespace(GOLD=1,SILVER=2,OIL=3,BONDS=4,INDUSTRIAL=5,GRAIN=6)
 
 class Player:
     def __init__(self, name):

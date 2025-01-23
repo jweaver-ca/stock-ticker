@@ -115,11 +115,30 @@ class GameBoard(object):
         self.curses_color = dict() # key=colorname, value=curses color pair
         self.program_exited = False # so we can stop the KeyboardThread
 
+        GameBoard.set_curses_color_rgb(10, 225, 184, 0)
+        GameBoard.set_curses_color_rgb(11, 255, 255, 255)
+        GameBoard.set_curses_color_rgb(12, 225, 173, 81)
+        GameBoard.set_curses_color_rgb(13, 190, 244, 134)
+        GameBoard.set_curses_color_rgb(14, 255, 186, 226)
+        GameBoard.set_curses_color_rgb(15, 238, 233, 171)
+
         self.init_curses_color(1, "RED", curses.COLOR_RED)
         self.init_curses_color(2, "GREEN", curses.COLOR_GREEN)
         self.init_curses_color(3, "YELLOW", curses.COLOR_YELLOW)
         self.init_curses_color(4, "WHITE", curses.COLOR_WHITE)
-        self.color_processor = ColorProcessor()
+        self.init_curses_color(4, "BLUE", curses.COLOR_BLUE)
+        self.init_curses_color(5, "CYAN", curses.COLOR_CYAN)
+        self.init_curses_color(6, "MAGENTA", curses.COLOR_MAGENTA)
+        self.init_curses_color(7, "BLACK", curses.COLOR_BLACK)
+
+        self.init_curses_color(10, "GOLD"      , 10)
+        self.init_curses_color(11, "SILVER"    , 11)
+        self.init_curses_color(12, "OIL"       , 12)
+        self.init_curses_color(13, "BONDS"     , 13)
+        self.init_curses_color(14, "INDUSTRIAL", 14)
+        self.init_curses_color(15, "GRAIN"     , 15)
+
+        self.color_processor = ColorProcessor(self.curses_color)
 
         self.scr.clear()
 
@@ -199,6 +218,9 @@ class GameBoard(object):
         '''
         if self.debug:
             self.add_system_msg(f"[DEBUG]: {msg}")
+
+    def set_curses_color_rgb(colornum, r, g, b):
+        curses.init_color(colornum, *(int(c*1000/255) for c in (r, g, b)))
 
     def init_curses_color(self, pairnum, name, forecolor, backcolor=curses.COLOR_BLACK):
         curses.init_pair(pairnum, forecolor, backcolor)
@@ -1091,18 +1113,18 @@ class ScrollArea():
         #      mostly its just confusing why this formatting is done...
         #lst_msg = textwrap.wrap(str_message,width=self.width)
         lst_color_msg = self.color_processor.process_colors(str_message, width=self.width)
-        print (lst_color_msg)
         with self.drawlock:
             self.cwin.scroll(len(lst_color_msg))
-            for i, msgpart in enumerate(lst_color_msg):
+            for i, color_phrase in enumerate(lst_color_msg):
                 y = self.BY + 1 - len(lst_color_msg) + i
                 #self.cwin.addstr(y, 0, lst_msg[i], attr)
-                for (x, str_subpart, attr) in msgpart:
-                    if attr is None:
-                        attr = curses.A_NORMAL
-                    self.cwin.addstr(y, x, str_subpart, attr)
+                #for (x, str_subpart, attr) in color_phrase:
+                for cp_part in color_phrase.parts:
+                    if cp_part.attr is None:
+                        cp_part.attr = curses.A_NORMAL
+                    self.cwin.addstr(y, cp_part.x, cp_part.strval, cp_part.attr)
             self.cwin.refresh()
-            
+
 class Dialog():
     '''
     A Dialog is a pop-up window that will show over the GameBoard when it's
@@ -1367,7 +1389,7 @@ class KeyboardThread(threading.Thread):
 
 def main(stdscr):
     curses.curs_set(0)
-    lst_stock_names = ["GOLD", "SILVER", "INDUSTRIAL", "BONDS", "OIL", "GRAIN"]
+    lst_stock_names = ["GOLD", "SILVER", "OIL", "BONDS", "INDUSTRIAL", "GRAIN"]
     gb = GameBoard(stdscr, lst_stock_names)    
     gb.debug = True
     #stdscr.border()
