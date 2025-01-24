@@ -552,7 +552,7 @@ def process_message(message, clientname):
                 player = game.player(client.get_name())
                 client.conn.send(bmsg('initgame', game.init_game_info(player.name)))
                 client.conn.send(bmsg('gamestat', game.status()))
-                send_all(bmsg('joined', player.name))
+                send_all(bmsg('joined', {'newplayer': player.name, 'all': game.playernames()}))
                 client.conn.send(bmsg('playerlist', game.playernames()))
             else:
                 # fail

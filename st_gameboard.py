@@ -170,7 +170,7 @@ class GameBoard(object):
         # bottom of screen
         # hotkey
         self.win_hotkey = Window(self.win_main.BY(), self.win_main.LX(), 1, self.win_main.width) 
-        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]eady  [S]ubmit Order  [P]ause  [Q]uit')
+        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]eady  [S]ubmit Order  [C]ancel Order  [H]elp  [P]ause  [Q]uit')
 
         # chatmsg - entry window for typing chat message to other players
         self.win_chatmsg = Window(self.win_hotkey.TY()-2, self.win_main.LX(), 1, self.win_main.width) 
@@ -388,21 +388,33 @@ class GameBoard(object):
         width and justify must be both be given or neither.  justify is one of '<', '^', '>'
             and width is the length of the field to justify the the within.
         '''
+        # NOTE: width here is for justify, not for wrapping
+        color_phrase = self.color_processor.process_colors(text)
         if width is not None:
-            if justify not in ['<', '^', '>']:
+            if justify == '<':
+                init_x = 0
+            elif justify == '>':
+                init_x = width - len(color_phrase.phrase)
+            elif justify == '^':
+                init_x = int((width - len(color_phrase.phrase))/2)
+            else:
                 raise ValueError(f"Invalid value for justify [{justify}]")
-            str_text = f"{text:{justify}{width}s}"
+            #str_text = f"{text:{justify}{width}s}"
         else:
             if justify is not None:
                 raise ValueError(f"Must provide width along with justify")
-            str_text = str(text)
+            init_x = 0
+            #str_text = str(text)
             
         (thisy, thisx) = (y, x)
         if y < 0:
             thisy = win.height - (abs(y)-1) - 1
         if x < 0:
-            thisx = win.width - (abs(x)-1) - len(str_text)
-        self.scr.addstr(win.uly+thisy, win.ulx+thisx, str_text)
+            thisx = win.width - (abs(x)-1) - len(color_phrase.phrase)
+        for cp_part in color_phrase.parts:
+            if cp_part.attr is None:
+                cp_part.attr = curses.A_NORMAL
+            self.scr.addstr(win.uly+thisy, win.ulx+thisx+init_x+cp_part.x, cp_part.strval, cp_part.attr)
 
     def _border_cell_val(key, value, dict_border_cells):
         if not key in dict_border_cells:
@@ -412,7 +424,7 @@ class GameBoard(object):
     def _init_draw_market(self, dict_border_cells):
         (uly, ulx, h, w) = self.win_market.dimensions()
         yoff = 2 # y from top of window to start
-        xoff = 3
+        xoff = 2
         max_name_len = max([len(x) for x in self.stock_names])
         len_stockprice = 3
         xprice = xoff + max_name_len + 2 # 2 right of longest stock name
@@ -425,7 +437,7 @@ class GameBoard(object):
         self._add_button_group('buysell', self.update_pending_order)
         btn_names_for_nav = []
         for i, stockname in enumerate(self.stock_names):
-            self.add_text(self.win_market, yoff+i, xoff, stockname)
+            self.add_text(self.win_market, yoff+i, xoff, f"<c:{stockname}:r> <c:{stockname}>{stockname}</c>")
             self._add_field(f'stockprice-{i}', self.win_market, yoff+i, xprice, len_stockprice, '>', initval=0)
             self._add_field(f'stockdiv-{i}', self.win_market, yoff+i, xdiv, 1)
             # TODO: these +/- will have to be implemented as controls soon...
@@ -686,6 +698,9 @@ class GameBoard(object):
         
         return msg
 
+    def display_player_joined(self, player_name):
+        self.add_system_msg(f'[{player_name} has joined]')
+
     def display_die_roll(self, roll_data, bln_refresh=True):
         color = 3
         if roll_data["action"] == "UP":
@@ -773,13 +788,13 @@ class GameBoard(object):
                 if shares != 0:
                     lst_summary.append(f"{self.stock_names[i]} {shares:+}")
             str_summary = ', '.join(lst_summary)
-            self.add_system_msg(f'BuySell order approved: {str_summary}')
+            self.add_system_msg(f'BuySell order <c:GREEN>approved</c>: {str_summary}')
         else:
-            self.add_system_msg(f'BuySell order REJECTED: {data["reject-reason"]}')
+            self.add_system_msg(f'BuySell order <c:RED>REJECTED</c>: {data["reject-reason"]}')
         self.reset_pending_order()
 
     def report_div(self, i_stock, earned):
-        self.add_system_msg(f'{self.stock_names[i_stock]} dividend earned you ${earned}!')
+        self.add_system_msg(f'<c:{i_stock+10}>{self.stock_names[i_stock]}</c> <c:3>dividend</c> earned you <c:GREEN>${earned}</c>!')
 
     def buysell_operation(self):
         '''Create operation based on pending_order and current prices'''
@@ -1359,11 +1374,6 @@ class KeyboardThread(threading.Thread):
                 str_msg = self.gameboard.input_chat_message()
                 if (str_msg):
                     self.gameboard.game_op_queue.put(game_operation('chat-message', str_msg))
-            elif ckey in ('f', 'F'):
-                self.gameboard.add_system_msg('redraw requested')
-               #self.gameboard.redraw()
-               #self.gameboard.scr.refresh()
-               #curses.doupdate()
             elif ckey in ('r', 'R'):
                 # request to start game (basically "I'm ready" message to server)
                 self.gameboard.game_op_queue.put(game_operation('ready-start', None))
@@ -1374,6 +1384,13 @@ class KeyboardThread(threading.Thread):
                 op_data = self.gameboard.buysell_operation()
                 if op_data: # None if no pending order
                     self.gameboard.game_op_queue.put(game_operation('buysell', op_data))
+            elif ckey in ('c', 'C'):
+                self.gameboard.reset_pending_order()
+            elif ckey in ('h', 'H'):
+                self.gameboard.add_system_msg('HELP: [Tab] to switch button groups. Arrows keys to select. [Space] to click.')
+            elif ckey in ('[', ']'):
+                action = 'down' if ckey == ']' else 'up'
+                self.gameboard.blocksz_change({'action':action, 'deltas': 1})
             elif key in (curses.ascii.SP, curses.ascii.CR):
                 if not self.gameboard.active_buttongroup:
                     self.gameboard.dbg('click but no active button group')

@@ -24,7 +24,7 @@ C       ready-start Signal ready for game start
  S      error       Server couldnt process msg      error details
  S      disconnect  A client has disc.              Client name
  S      server-exit Server exiting
- S      joined      A client has joined             Client name
+ S      joined      A client has joined             {'newplayer': Client name, 'all': tuple-all player names}
  S      playerlist  List of players in game         tuple of strings
  S      servermsg   Generic message from server     string
 --- GAME RELATED ---

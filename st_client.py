@@ -128,7 +128,11 @@ def process_message(msgobj):
     elif mtype == 'disconnect':
         gameboard.add_system_msg(f'[{msgobj["DATA"]} has disconnected]')
     elif mtype == 'joined':
-        gameboard.add_system_msg(f'[{msgobj["DATA"]} has joined]')
+        #gameboard.add_system_msg(f'[{msgobj["DATA"]} has joined]')
+        #{'newplayer': playername, 'all': tuple}
+        gameboard.display_player_joined(mdata["newplayer"])
+        other_player_list = [ name for name in mdata["all"] if name != args.name ]
+        gameboard.update_players(args.name, other_player_list)
     elif mtype == 'server-exit':
         gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]')
         running = False
