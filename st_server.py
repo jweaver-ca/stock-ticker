@@ -1,13 +1,3 @@
-'''
-    NOTES:
-    A client can request a purchase of X shares at X price.  If the server recieves this request
-    and the price of the stock in the purchase request no longer matches the actual price,
-    what should happen?
-        - refuse the purchase?
-        - make the purchase if possible anyway?
-            > if lower price, always. if higher price ...??
-        - make this a client setting?
-'''
 # (useless comment from andrea)
 #
 # TODO: .bind localhost <-- need to change for actual network comms to work?
@@ -30,6 +20,7 @@ from st_common import MessageReceiver
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-t", "--timersec", type=int, required=False, default=3, help="Default seconds between die rolls")
+parser.add_argument("-p", "--port", type=int, required=False, default=8089, help="TCP/IP port to listen for connections")
 args = parser.parse_args() 
 
 SERVER_OPT = {
@@ -62,13 +53,12 @@ stock_names = [ 'GOLD', 'SILVER', 'OIL', 'BONDS', 'INDUSTRIAL', 'GRAIN' ]
 sel = selectors.DefaultSelector()
 
 serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-serversocket.bind(('localhost', 8089))
+serversocket.bind(('localhost', args.port))
 serversocket.listen(5) # become a server socket, maximum 5 connections
 #serversocket.settimeout(5) # .accept() blocks and ctrl-c doesn't break out of it.  this allows us to quit easier, but requires us to handle the except during accept
 
-lock = threading.Lock() # TODO: remove this, each game should have its own
-
 class Client:
+    '''Client objects represent a client connected to the server'''
     def __init__(self, name, conn):
         self._name = name
         self.conn = conn
@@ -225,6 +215,10 @@ class StockTickerGame():
     Encapsulates an entire session of Stock Ticker including the market
     players.
     '''
+    STATUS_WAITING_START = 0
+    STATUS_RUNNING = 1
+    STATUS_ENDED = 2
+
     def __init__(self, gamename):
         self.INIT_VAL = 100      # stock price for each at game start
         self.OFF_MARKET_VAL = 0  # stock goes off market if <= this price
@@ -245,7 +239,13 @@ class StockTickerGame():
         #self.stock_names = stock_names hmm not needed
         self.market = [ self.INIT_VAL for i in range(len(stock_names)) ]
         self._players = dict()
-        self.running = False # flag indicating if game underway or not
+        
+        # status flags
+        # TODO: implement these
+        self.status = StockTickerGame.STATUS_WAITING_START
+        #self.waiting_to_start = True # becomes False (forever) after starting
+        #self.running = False # flag indicating if game underway or not. False before gameplay starts, and after game ends
+        #self.has_ended = False # True only after the game has ended
 
         #self.roll_timer = threading.Timer(self.option_timer_seconds, self.market_action)
         self.roll_timer = DiceRollTimer(self.option_timer_seconds, self.market_action)
@@ -296,8 +296,11 @@ class StockTickerGame():
         return all([p.ready_start for p in self._players.values()])
 
     def start_game(self):
-        self.running = True
-        self.roll_timer.start()
+        if self.status == StockTickerGame.STATUS_WAITING_START:
+            self.status = StockTickerGame.STATUS_RUNNING
+            self.roll_timer.start()
+        else:
+            raise RuntimeError(f"Attempt to start_game not in a waiting state {self.status}")
 
     def die_roll(self):
         ''' Produces a die and returns the result, including a flag to inicate
@@ -471,12 +474,29 @@ class StockTickerGame():
         return roll['action'] == 'DIV' and not self.pays_dividend(roll['stock'])
 
     def assert_locked(self):
-        if self.running and not self.game_lock.locked():
+        '''assert_locked: called by functions that don't want to obtain the game_lock
+        themselves, but must always be called from code blocks that have the game_lock
+        already. (a mechanism to help prevent buggy programming)
+        '''
+        if self.is_running() and not self.game_lock.locked():
             raise RuntimeError("Game is not locked")
 
-    def status(self):
+    def is_running(self):
+        return self.status == StockTickerGame.STATUS_RUNNING
+
+    def get_status(self):
         # NOTE: may add more details (e.g. paused,etc?), so using dictionary even though just 1 item...
-        return {'started': self.running}
+        '''Current game status. 
+        return value here is used as the value in a 'gamestat' message to clients
+        '''
+        if self.status == StockTickerGame.STATUS_WAITING_START:
+            return 'WAITING-START'
+        elif self.status == StockTickerGame.STATUS_RUNNING:
+            return 'RUNNING'
+        elif self.status == StockTickerGame.STATUS_RUNNING:
+            return 'ENDED'
+        else:
+            raise ValueError(f"Game in bad state: {self.status}")
 
 # -- end class StockTickerGame
 
@@ -551,7 +571,7 @@ def process_message(message, clientname):
                 game = games[gamename]
                 player = game.player(client.get_name())
                 client.conn.send(bmsg('initgame', game.init_game_info(player.name)))
-                client.conn.send(bmsg('gamestat', game.status()))
+                client.conn.send(bmsg('gamestat', game.get_status()))
                 send_all(bmsg('joined', {'newplayer': player.name, 'all': game.playernames()}))
                 client.conn.send(bmsg('playerlist', game.playernames()))
             else:
@@ -565,7 +585,7 @@ def process_message(message, clientname):
             if game.all_players_ready():
                 game.start_game()
                 send_all(bmsg('start', None))
-                send_all(bmsg('gamestat', game.status()))
+                send_all(bmsg('gamestat', game.get_status()))
         elif message['TYPE'] == 'buysell':
             game.process_order(player, message['DATA'])
         else:
@@ -594,16 +614,15 @@ def buysell_call(game):
 def disconnect_client(client):
     name = client.get_name()
     print (f'disconnect_client called for {name}')
-    with lock: #Unsure how necessary or correct in logic this is...
-        #del client_conns[oClient.conn]
-        if game := client.get_game():
-            game.remove_player(name)
-            send_all_game(game, bmsg('disconnect', name))
-            send_all_game(game, bmsg('playerlist', game.playernames()))
-            print (f'Removed {name} from game "{game.name}"')
-        sel.unregister(client.conn)
-        client.conn.close()
-        del clients[name]
+    #del client_conns[oClient.conn]
+    if game := client.get_game():
+        game.remove_player(name) # call is sync'd
+        send_all_game(game, bmsg('disconnect', name))
+        send_all_game(game, bmsg('playerlist', game.playernames()))
+        print (f'Removed {name} from game "{game.name}"')
+    sel.unregister(client.conn)
+    client.conn.close()
+    del clients[name]
     print (f'{name} has disconnected')
 
 # msgobj: bytes of json message to send
@@ -667,7 +686,7 @@ while running:
                     conn.close()
             else:
                 # HMM: when would selectors.EVENT_WRITE ever be used??
-                # this is an incoming message from a connected client, or ??
+                # this is an incoming message from a connected client
                 client = key.data
                 conn = key.fileobj
                 if mask & selectors.EVENT_READ:

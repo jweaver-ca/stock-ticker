@@ -11,6 +11,7 @@
 - have stock names in only ONE place (server)
 - change countdown timer to the game timer (no need for roll timer display)
 - when blocksz changes, update all $/BLOCK listings immediately
+- add [H]elp command, blurb about tab keys, arrow keys, space bar for buttons
 
 --------------------------------------------------------------------------------
   DONE

@@ -379,7 +379,9 @@ class GameBoard(object):
         
     def add_text(self, win, y, x, text, width=None, justify=None):
         '''
-        Add text to GameBoard inside the given Window
+        Add text to GameBoard inside the given Window. This would be permanent text added
+        during the init phase of drawing.  For text that needs to be updated use a label.
+
         win: Window to add text to
         y: if 0+, offset from top of window.  If -1 or less, offset from bottom of window, 
             -1 indicating the bottom-most line
@@ -708,8 +710,9 @@ class GameBoard(object):
         elif roll_data["action"] == "DOWN":
             color = 1
             
+        sname = self.stock_names[roll_data["stock"]]
         with self.drawlock:
-            self.sa_mkt_act.add_message(f'{self.stock_names[roll_data["stock"]]} <c:{color}>{roll_data["action"]}</c> {roll_data["amount"]}')
+            self.sa_mkt_act.add_message(f'<c:{sname}>{sname}</c> <c:{color}>{roll_data["action"]}</c> {roll_data["amount"]}')
             self.refresh_if(bln_refresh)
 
     def display_split_message(self, split_data, bln_refresh=True):

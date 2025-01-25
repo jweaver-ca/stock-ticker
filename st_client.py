@@ -1,10 +1,6 @@
-# TODO: ensure easy way to exit
-# TODO: exit properly on error
-# v2 add selectors
-# V3:
-# - add message objects
-# - allow server to send shutdown requests to clients
-# - handle client disconnect by server
+'''st_client.py
+The client program for a stock-ticker game.
+'''
 
 import argparse
 import traceback
@@ -38,13 +34,6 @@ parser.add_argument("--port", "-p", type=int, default=default_args['port'], help
 
 args = parser.parse_args() 
 gameserver = args.server
-
-# game rules TODO: these should come from the server
-# in any case, these value MUST match the server...
-DIV_MIN = 105 # minimum stock value to pay dividends
-SPLIT_VAL = 200 # when a stock reachese this value it splits
-BUST_VAL = 0    # stock goes "off the market" if at or below this value
-INIT_VAL = 100  # price each stock starts at
 
 # Could use Enum.. no real need I think...
 # TODO: decide if simplenamespace or just a plain old array of string for stocks...
@@ -80,11 +69,6 @@ class StockMarket:
         if not self.initialized:
             raise RuntimeError(f"StockMarket not initialized")
         return self.prices[i_stock]
-
-class ClientGame:
-    def __init__(self, player, market):
-        self.player = player
-        self.market = market
 
 # simple message object/dictionary
 # TODO: rename msg because it shares name with message type 'msg' / confusing
@@ -148,6 +132,7 @@ def process_message(msgobj):
         gameboard.update_players(args.name, other_player_list)
     elif mtype == 'gamestat':
         # eg: {'started': True}
+            # 'WAITING-START','RUNNING','ENDED',
         update_game_status(mdata)
     elif mtype == 'actiontime':
         # TODO: animate the countdown timer
@@ -254,9 +239,14 @@ def process_quit():
 def update_game_status(game_status):
     # NOTE: I think it makes sense for this to be a simple string from client to gameboard
     # A status message typically is just a plain string
+    # game_status: # 'WAITING-START','RUNNING','ENDED',
     str_status = f'[Connected to {args.server}]'
-    if game_status['started']:
+    if game_status == 'WAITING-START':
+        str_status += ' Waiting for game start'
+    elif game_status == 'RUNNING':
         str_status += ' Game started'
+    elif game_status == 'ENDED':
+        str_status += ' Game has ended'
     else:
         str_status += ' Waiting for game start'
     gameboard.update_status(str_status)
