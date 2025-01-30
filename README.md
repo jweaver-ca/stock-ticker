@@ -34,7 +34,7 @@ When all clients currently joined to the game press `R` for ready, the game will
 and the stock market will begin to move.
 
 A game is timed (current default is 15 minutes from start time).  When the end time has been
-reached, the *next* die roll bring on the game end.  The player with highest Net Worth (i.e.
+reached, the *next* die roll will bring on the game end.  The player with highest Net Worth (i.e.
 cash and current value of portfolio) will be crowned the winner.  
 
 You'll have to restart all the programs (currently) to play again.
