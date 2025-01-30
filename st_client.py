@@ -2,6 +2,14 @@
 The client program for a stock-ticker game.
 '''
 
+try:
+    import curses
+except ModuleNotFoundError:
+    # once installed on system, this all goes away
+    print ("[curses] library not installed.")
+    print ("try > pip install windows-curses")
+    exit (1)
+
 import argparse
 import traceback
 import socket
@@ -13,15 +21,6 @@ import datetime
 import types # SimpleNamespace for stock enum-ish construct?
 from st_gameboard import GameBoard
 from st_common import MessageReceiver
-
-try:
-    import curses
-except ModuleNotFoundError:
-    # once installed on system, this all goes away
-    print ("[curses] library not installed.")
-    print ("try > pip install windows-curses")
-    exit (1)
-
 
 default_args = {
     'port': 8089,
@@ -170,8 +169,18 @@ def process_message(msgobj):
         gameboard.display_bust_message(mdata)
     elif mtype == 'player':
         update_player(mdata)
-    elif mtype == 'start':
-        gameboard.add_system_msg('All players ready. Game has started!')
+    elif mtype == 'gamestart':
+        # TODO: add gameboard. start game routine, keep countdown
+        timestr = datetime.datetime.fromisoformat(mdata['stoptime']).astimezone().strftime('%Y/%m/%d %H:%M:%S')
+        gamelen = mdata['gamelen']
+        gameboard.add_system_msg(f'All players ready. Game has started! Stops at {timestr} ({gamelen} mins)')
+    elif mtype == 'gameover':
+        # {winner: [names,...], winner-networth: n, [{'name': x, 'cash': n, 'networth': n, 'portfolio':[n,...]},...]
+        winner_name = mdata['winner'][0] if len(mdata['winner']) == 1 else ', '.join(mdata['winner']) + ' (TIED!) '
+        gameboard.add_system_msg(f'GAME HAS ENDED! Winner: {winner_name} with a net worth of ${mdata["winner-networth"]}')
+        for p in mdata['player-info']:
+            str_portfolio = ', '.join(f'{stock_names[i]}: {p["portfolio"][i]}' for i in range(len(stock_names)))
+            gameboard.add_system_msg(f'{p["name"]}: ${p["networth"]} net worth, ${p["cash"]} cash, {str_portfolio}')
     elif mtype == 'servermsg':
         gameboard.add_system_msg(str(mdata))
     elif mtype == 'div':
@@ -217,7 +226,7 @@ def process_gameboard_ops(gameboard):
             process_quit()
         elif otype == 'ready-start':
             if not player.ready_start:
-                clientsocket.send(bmsg('start', odata))
+                clientsocket.send(bmsg('readystart', odata))
                 player.ready_start = True
             else:
                 gameboard.dbg('game start requested again')
