@@ -277,6 +277,7 @@ class GameBoard(object):
             self.refresh_if(bln_refresh)
 
     def blocksz_change(self, data):
+        ''' Process a request to change the buy/sell block size. '''
         if data['action'] == 'down':
             deltas = -1 * data['deltas']
         else:
@@ -286,8 +287,13 @@ class GameBoard(object):
         new_block_sz = max(new_block_sz, self.MIN_BLOCK_SZ)
         if new_block_sz == self.buysell_block_sz:
             return # no change, ignore (minimum enforced)
-        self.buysell_block_sz = new_block_sz
-        self.update_field('blocksz', self.buysell_block_sz, bln_refresh=True)
+        with self.drawlock:
+            self.buysell_block_sz = new_block_sz
+            self.update_field('blocksz', self.buysell_block_sz, bln_refresh=False)
+            for i, s in enumerate(self.stock_names):
+                price_per_block = int(self.stock_prices[i] * new_block_sz / 100)
+                self.update_field(f'blockprice-{i}', price_per_block, bln_refresh=False)
+            self.scr.refresh()
 
     def update_players(self, this_player_name, other_player_names, bln_refresh=True):
         '''
@@ -301,9 +307,7 @@ class GameBoard(object):
             self.refresh_if(bln_refresh)
 
     def update_player(self, player_cash, networth, lst_owned, bln_refresh=True):
-        '''
-        Update this player's attributes
-        '''
+        ''' Update this player's attributes on screen '''
         self.update_player_cash(player_cash, networth, bln_refresh=False)
         self.update_player_portfolio(lst_owned, bln_refresh=False)
         self.refresh_if(bln_refresh)
@@ -315,11 +319,13 @@ class GameBoard(object):
         self.refresh_if(bln_refresh)
 
     def update_player_owned(self, i_stock, shares, bln_refresh=True):
+        ''' Update portfolio on screen for 1 stock '''
         self.player_owned[i_stock] = shares
         self.update_field(f'stockowned-{i_stock}', shares, bln_refresh)
         self.refresh_if(bln_refresh)
 
     def update_player_portfolio(self, lst_owned, bln_refresh=True):
+        ''' Update portfolio on screen for all stocks '''
         for i, owned in enumerate(lst_owned):
             if owned is not None:
                 self.update_player_owned(i, owned, bln_refresh=False)
@@ -442,7 +448,6 @@ class GameBoard(object):
             self.add_text(self.win_market, yoff+i, xoff, f"<c:{stockname}:r> <c:{stockname}>{stockname}</c>")
             self._add_field(f'stockprice-{i}', self.win_market, yoff+i, xprice, len_stockprice, '>', initval=0)
             self._add_field(f'stockdiv-{i}', self.win_market, yoff+i, xdiv, 1)
-            # TODO: these +/- will have to be implemented as controls soon...
             (btn_name_sell, btn_name_buy) = (f'sell-{i}', f'buy-{i}')
             self._add_button(self.buttongroups['buysell'], btn_name_sell, '-', {'action':'sell', 'stock': i}, self.win_market, yoff+i, xminus)
             self._add_button(self.buttongroups['buysell'], btn_name_buy, '+', {'action':'buy', 'stock': i}, self.win_market, yoff+i, xplus)
@@ -755,12 +760,16 @@ class GameBoard(object):
             self.refresh_if(True)
 
     def update_pending(self, bln_refresh=True):
-        ''' called to reflect new market prices '''
+        ''' called to reflect new market prices 
+        Calculates the total cost of pending order and updates
+        '''
         self.update_field(f'pending-$', -self.pending_order_cost())
         self.refresh_if(bln_refresh)
 
     def update_pending_order(self, order_data):
-        ''' Called by clicking a buysell button '''
+        ''' Called by clicking a buysell button 
+        order_data: {'action':'buy'/'sell', 'stock': i}
+        '''
         i_stock = order_data['stock']
         share_count = self.buysell_block_sz
         if order_data['action'] == 'buy':
@@ -773,9 +782,12 @@ class GameBoard(object):
             share_total = self.pending_order[i_stock] + share_count 
         elif order_data['action'] == 'sell':
             # sell here can really mean either 'lower the buy' or 'sell' if current pending <= 0
-            if self.player_owned[i_stock] + (self.pending_order[i_stock] - share_count) < 0:
+            # if player attempts to sell *more* shares than owned, just pend to sell what they have
+            if self.player_owned[i_stock] + self.pending_order[i_stock] == 0:
                 self.dbg(f'below zero bro: {self.pending_order=} {share_count=} owned={self.player_owned[i_stock]}')
                 return # not enough stock, ignore
+            if self.player_owned[i_stock] + (self.pending_order[i_stock] - share_count) < 0:
+                share_count = self.player_owned[i_stock]
             share_total = self.pending_order[i_stock] - share_count 
         self.pending_order[i_stock] = share_total
         with self.drawlock:

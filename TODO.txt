@@ -5,11 +5,11 @@
     it doesn't give much away and could be funny)
 - implement chat message entry without getstr(). this is what causes all the drawing artifacts now
     now that event-driven draw operations are synchronized
+    NOTE: I'm not convinced this is really a cause of issues, test more
 - client. on start, get name if not provided (no curses?), check server, then start curses
 - client. update status to include game name once joined
 - have stock names in only ONE place (server)
 - change countdown timer to the game timer (no need for roll timer display)
-- when blocksz changes, update all $/BLOCK listings immediately
 - Allow Play again option, server to re-play without restart
 
 --------------------------------------------------------------------------------
@@ -27,3 +27,4 @@
 - when player joins, update label at top with player names for existing players
 - program a time/$ limit ending and announce winner
 - add [H]elp command, blurb about tab keys, arrow keys, space bar for buttons
+- when blocksz changes, update all $/BLOCK listings immediately
