@@ -115,11 +115,30 @@ class GameBoard(object):
         self.curses_color = dict() # key=colorname, value=curses color pair
         self.program_exited = False # so we can stop the KeyboardThread
 
+        GameBoard.set_curses_color_rgb(10, 225, 184, 0)
+        GameBoard.set_curses_color_rgb(11, 255, 255, 255)
+        GameBoard.set_curses_color_rgb(12, 225, 173, 81)
+        GameBoard.set_curses_color_rgb(13, 190, 244, 134)
+        GameBoard.set_curses_color_rgb(14, 255, 186, 226)
+        GameBoard.set_curses_color_rgb(15, 238, 233, 171)
+
         self.init_curses_color(1, "RED", curses.COLOR_RED)
         self.init_curses_color(2, "GREEN", curses.COLOR_GREEN)
         self.init_curses_color(3, "YELLOW", curses.COLOR_YELLOW)
         self.init_curses_color(4, "WHITE", curses.COLOR_WHITE)
-        self.color_processor = ColorProcessor()
+        self.init_curses_color(4, "BLUE", curses.COLOR_BLUE)
+        self.init_curses_color(5, "CYAN", curses.COLOR_CYAN)
+        self.init_curses_color(6, "MAGENTA", curses.COLOR_MAGENTA)
+        self.init_curses_color(7, "BLACK", curses.COLOR_BLACK)
+
+        self.init_curses_color(10, "GOLD"      , 10)
+        self.init_curses_color(11, "SILVER"    , 11)
+        self.init_curses_color(12, "OIL"       , 12)
+        self.init_curses_color(13, "BONDS"     , 13)
+        self.init_curses_color(14, "INDUSTRIAL", 14)
+        self.init_curses_color(15, "GRAIN"     , 15)
+
+        self.color_processor = ColorProcessor(self.curses_color)
 
         self.scr.clear()
 
@@ -151,7 +170,7 @@ class GameBoard(object):
         # bottom of screen
         # hotkey
         self.win_hotkey = Window(self.win_main.BY(), self.win_main.LX(), 1, self.win_main.width) 
-        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]eady  [S]ubmit Order  [P]ause  [Q]uit')
+        self.add_text(self.win_hotkey, 0, 1, '[M]essage  [R]eady  [S]ubmit Order  [C]ancel Order  [H]elp  [P]ause  [Q]uit')
 
         # chatmsg - entry window for typing chat message to other players
         self.win_chatmsg = Window(self.win_hotkey.TY()-2, self.win_main.LX(), 1, self.win_main.width) 
@@ -199,6 +218,9 @@ class GameBoard(object):
         '''
         if self.debug:
             self.add_system_msg(f"[DEBUG]: {msg}")
+
+    def set_curses_color_rgb(colornum, r, g, b):
+        curses.init_color(colornum, *(int(c*1000/255) for c in (r, g, b)))
 
     def init_curses_color(self, pairnum, name, forecolor, backcolor=curses.COLOR_BLACK):
         curses.init_pair(pairnum, forecolor, backcolor)
@@ -357,7 +379,9 @@ class GameBoard(object):
         
     def add_text(self, win, y, x, text, width=None, justify=None):
         '''
-        Add text to GameBoard inside the given Window
+        Add text to GameBoard inside the given Window. This would be permanent text added
+        during the init phase of drawing.  For text that needs to be updated use a label.
+
         win: Window to add text to
         y: if 0+, offset from top of window.  If -1 or less, offset from bottom of window, 
             -1 indicating the bottom-most line
@@ -366,21 +390,33 @@ class GameBoard(object):
         width and justify must be both be given or neither.  justify is one of '<', '^', '>'
             and width is the length of the field to justify the the within.
         '''
+        # NOTE: width here is for justify, not for wrapping
+        color_phrase = self.color_processor.process_colors(text)
         if width is not None:
-            if justify not in ['<', '^', '>']:
+            if justify == '<':
+                init_x = 0
+            elif justify == '>':
+                init_x = width - len(color_phrase.phrase)
+            elif justify == '^':
+                init_x = int((width - len(color_phrase.phrase))/2)
+            else:
                 raise ValueError(f"Invalid value for justify [{justify}]")
-            str_text = f"{text:{justify}{width}s}"
+            #str_text = f"{text:{justify}{width}s}"
         else:
             if justify is not None:
                 raise ValueError(f"Must provide width along with justify")
-            str_text = str(text)
+            init_x = 0
+            #str_text = str(text)
             
         (thisy, thisx) = (y, x)
         if y < 0:
             thisy = win.height - (abs(y)-1) - 1
         if x < 0:
-            thisx = win.width - (abs(x)-1) - len(str_text)
-        self.scr.addstr(win.uly+thisy, win.ulx+thisx, str_text)
+            thisx = win.width - (abs(x)-1) - len(color_phrase.phrase)
+        for cp_part in color_phrase.parts:
+            if cp_part.attr is None:
+                cp_part.attr = curses.A_NORMAL
+            self.scr.addstr(win.uly+thisy, win.ulx+thisx+init_x+cp_part.x, cp_part.strval, cp_part.attr)
 
     def _border_cell_val(key, value, dict_border_cells):
         if not key in dict_border_cells:
@@ -390,7 +426,7 @@ class GameBoard(object):
     def _init_draw_market(self, dict_border_cells):
         (uly, ulx, h, w) = self.win_market.dimensions()
         yoff = 2 # y from top of window to start
-        xoff = 3
+        xoff = 2
         max_name_len = max([len(x) for x in self.stock_names])
         len_stockprice = 3
         xprice = xoff + max_name_len + 2 # 2 right of longest stock name
@@ -403,7 +439,7 @@ class GameBoard(object):
         self._add_button_group('buysell', self.update_pending_order)
         btn_names_for_nav = []
         for i, stockname in enumerate(self.stock_names):
-            self.add_text(self.win_market, yoff+i, xoff, stockname)
+            self.add_text(self.win_market, yoff+i, xoff, f"<c:{stockname}:r> <c:{stockname}>{stockname}</c>")
             self._add_field(f'stockprice-{i}', self.win_market, yoff+i, xprice, len_stockprice, '>', initval=0)
             self._add_field(f'stockdiv-{i}', self.win_market, yoff+i, xdiv, 1)
             # TODO: these +/- will have to be implemented as controls soon...
@@ -664,6 +700,9 @@ class GameBoard(object):
         
         return msg
 
+    def display_player_joined(self, player_name):
+        self.add_system_msg(f'[{player_name} has joined]')
+
     def display_die_roll(self, roll_data, bln_refresh=True):
         color = 3
         if roll_data["action"] == "UP":
@@ -671,8 +710,9 @@ class GameBoard(object):
         elif roll_data["action"] == "DOWN":
             color = 1
             
+        sname = self.stock_names[roll_data["stock"]]
         with self.drawlock:
-            self.sa_mkt_act.add_message(f'{self.stock_names[roll_data["stock"]]} <c:{color}>{roll_data["action"]}</c> {roll_data["amount"]}')
+            self.sa_mkt_act.add_message(f'<c:{sname}>{sname}</c> <c:{color}>{roll_data["action"]}</c> {roll_data["amount"]}')
             self.refresh_if(bln_refresh)
 
     def display_split_message(self, split_data, bln_refresh=True):
@@ -751,13 +791,13 @@ class GameBoard(object):
                 if shares != 0:
                     lst_summary.append(f"{self.stock_names[i]} {shares:+}")
             str_summary = ', '.join(lst_summary)
-            self.add_system_msg(f'BuySell order approved: {str_summary}')
+            self.add_system_msg(f'BuySell order <c:GREEN>approved</c>: {str_summary}')
         else:
-            self.add_system_msg(f'BuySell order REJECTED: {data["reject-reason"]}')
+            self.add_system_msg(f'BuySell order <c:RED>REJECTED</c>: {data["reject-reason"]}')
         self.reset_pending_order()
 
     def report_div(self, i_stock, earned):
-        self.add_system_msg(f'{self.stock_names[i_stock]} dividend earned you ${earned}!')
+        self.add_system_msg(f'<c:{i_stock+10}>{self.stock_names[i_stock]}</c> <c:3>dividend</c> earned you <c:GREEN>${earned}</c>!')
 
     def buysell_operation(self):
         '''Create operation based on pending_order and current prices'''
@@ -1091,18 +1131,18 @@ class ScrollArea():
         #      mostly its just confusing why this formatting is done...
         #lst_msg = textwrap.wrap(str_message,width=self.width)
         lst_color_msg = self.color_processor.process_colors(str_message, width=self.width)
-        print (lst_color_msg)
         with self.drawlock:
             self.cwin.scroll(len(lst_color_msg))
-            for i, msgpart in enumerate(lst_color_msg):
+            for i, color_phrase in enumerate(lst_color_msg):
                 y = self.BY + 1 - len(lst_color_msg) + i
                 #self.cwin.addstr(y, 0, lst_msg[i], attr)
-                for (x, str_subpart, attr) in msgpart:
-                    if attr is None:
-                        attr = curses.A_NORMAL
-                    self.cwin.addstr(y, x, str_subpart, attr)
+                #for (x, str_subpart, attr) in color_phrase:
+                for cp_part in color_phrase.parts:
+                    if cp_part.attr is None:
+                        cp_part.attr = curses.A_NORMAL
+                    self.cwin.addstr(y, cp_part.x, cp_part.strval, cp_part.attr)
             self.cwin.refresh()
-            
+
 class Dialog():
     '''
     A Dialog is a pop-up window that will show over the GameBoard when it's
@@ -1337,11 +1377,6 @@ class KeyboardThread(threading.Thread):
                 str_msg = self.gameboard.input_chat_message()
                 if (str_msg):
                     self.gameboard.game_op_queue.put(game_operation('chat-message', str_msg))
-            elif ckey in ('f', 'F'):
-                self.gameboard.add_system_msg('redraw requested')
-               #self.gameboard.redraw()
-               #self.gameboard.scr.refresh()
-               #curses.doupdate()
             elif ckey in ('r', 'R'):
                 # request to start game (basically "I'm ready" message to server)
                 self.gameboard.game_op_queue.put(game_operation('ready-start', None))
@@ -1352,6 +1387,13 @@ class KeyboardThread(threading.Thread):
                 op_data = self.gameboard.buysell_operation()
                 if op_data: # None if no pending order
                     self.gameboard.game_op_queue.put(game_operation('buysell', op_data))
+            elif ckey in ('c', 'C'):
+                self.gameboard.reset_pending_order()
+            elif ckey in ('h', 'H'):
+                self.gameboard.add_system_msg('HELP: [Tab] to switch button groups. Arrows keys to select. [Space] to click.')
+            elif ckey in ('[', ']'):
+                action = 'down' if ckey == ']' else 'up'
+                self.gameboard.blocksz_change({'action':action, 'deltas': 1})
             elif key in (curses.ascii.SP, curses.ascii.CR):
                 if not self.gameboard.active_buttongroup:
                     self.gameboard.dbg('click but no active button group')
@@ -1367,7 +1409,7 @@ class KeyboardThread(threading.Thread):
 
 def main(stdscr):
     curses.curs_set(0)
-    lst_stock_names = ["GOLD", "SILVER", "INDUSTRIAL", "BONDS", "OIL", "GRAIN"]
+    lst_stock_names = ["GOLD", "SILVER", "OIL", "BONDS", "INDUSTRIAL", "GRAIN"]
     gb = GameBoard(stdscr, lst_stock_names)    
     gb.debug = True
     #stdscr.border()

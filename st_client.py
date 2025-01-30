@@ -1,10 +1,14 @@
-# TODO: ensure easy way to exit
-# TODO: exit properly on error
-# v2 add selectors
-# V3:
-# - add message objects
-# - allow server to send shutdown requests to clients
-# - handle client disconnect by server
+'''st_client.py
+The client program for a stock-ticker game.
+'''
+
+try:
+    import curses
+except ModuleNotFoundError:
+    # once installed on system, this all goes away
+    print ("[curses] library not installed.")
+    print ("try > pip install windows-curses")
+    exit (1)
 
 import argparse
 import traceback
@@ -18,15 +22,6 @@ import types # SimpleNamespace for stock enum-ish construct?
 from st_gameboard import GameBoard
 from st_common import MessageReceiver
 
-try:
-    import curses
-except ModuleNotFoundError:
-    # once installed on system, this all goes away
-    print ("[curses] library not installed.")
-    print ("try > pip install windows-curses")
-    exit (1)
-
-
 default_args = {
     'port': 8089,
     'server': 'localhost'
@@ -39,17 +34,10 @@ parser.add_argument("--port", "-p", type=int, default=default_args['port'], help
 args = parser.parse_args() 
 gameserver = args.server
 
-# game rules TODO: these should come from the server
-# in any case, these value MUST match the server...
-DIV_MIN = 105 # minimum stock value to pay dividends
-SPLIT_VAL = 200 # when a stock reachese this value it splits
-BUST_VAL = 0    # stock goes "off the market" if at or below this value
-INIT_VAL = 100  # price each stock starts at
-
 # Could use Enum.. no real need I think...
 # TODO: decide if simplenamespace or just a plain old array of string for stocks...
-stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
-stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
+stock_names = [ 'GOLD', 'SILVER', 'OIL', 'BONDS', 'INDUSTRIAL', 'GRAIN' ]
+stock = types.SimpleNamespace(GOLD=1,SILVER=2,OIL=3,BONDS=4,INDUSTRIAL=5,GRAIN=6)
 
 class Player:
     def __init__(self, name):
@@ -80,11 +68,6 @@ class StockMarket:
         if not self.initialized:
             raise RuntimeError(f"StockMarket not initialized")
         return self.prices[i_stock]
-
-class ClientGame:
-    def __init__(self, player, market):
-        self.player = player
-        self.market = market
 
 # simple message object/dictionary
 # TODO: rename msg because it shares name with message type 'msg' / confusing
@@ -128,7 +111,11 @@ def process_message(msgobj):
     elif mtype == 'disconnect':
         gameboard.add_system_msg(f'[{msgobj["DATA"]} has disconnected]')
     elif mtype == 'joined':
-        gameboard.add_system_msg(f'[{msgobj["DATA"]} has joined]')
+        #gameboard.add_system_msg(f'[{msgobj["DATA"]} has joined]')
+        #{'newplayer': playername, 'all': tuple}
+        gameboard.display_player_joined(mdata["newplayer"])
+        other_player_list = [ name for name in mdata["all"] if name != args.name ]
+        gameboard.update_players(args.name, other_player_list)
     elif mtype == 'server-exit':
         gameboard.add_system_msg(f'[SERVER SHUTDOWN! Exiting...]')
         running = False
@@ -144,6 +131,7 @@ def process_message(msgobj):
         gameboard.update_players(args.name, other_player_list)
     elif mtype == 'gamestat':
         # eg: {'started': True}
+            # 'WAITING-START','RUNNING','ENDED',
         update_game_status(mdata)
     elif mtype == 'actiontime':
         # TODO: animate the countdown timer
@@ -181,8 +169,18 @@ def process_message(msgobj):
         gameboard.display_bust_message(mdata)
     elif mtype == 'player':
         update_player(mdata)
-    elif mtype == 'start':
-        gameboard.add_system_msg('All players ready. Game has started!')
+    elif mtype == 'gamestart':
+        # TODO: add gameboard. start game routine, keep countdown
+        timestr = datetime.datetime.fromisoformat(mdata['stoptime']).astimezone().strftime('%Y/%m/%d %H:%M:%S')
+        gamelen = mdata['gamelen']
+        gameboard.add_system_msg(f'All players ready. Game has started! Stops at {timestr} ({gamelen} mins)')
+    elif mtype == 'gameover':
+        # {winner: [names,...], winner-networth: n, [{'name': x, 'cash': n, 'networth': n, 'portfolio':[n,...]},...]
+        winner_name = mdata['winner'][0] if len(mdata['winner']) == 1 else ', '.join(mdata['winner']) + ' (TIED!) '
+        gameboard.add_system_msg(f'GAME HAS ENDED! Winner: {winner_name} with a net worth of ${mdata["winner-networth"]}')
+        for p in mdata['player-info']:
+            str_portfolio = ', '.join(f'{stock_names[i]}: {p["portfolio"][i]}' for i in range(len(stock_names)))
+            gameboard.add_system_msg(f'{p["name"]}: ${p["networth"]} net worth, ${p["cash"]} cash, {str_portfolio}')
     elif mtype == 'servermsg':
         gameboard.add_system_msg(str(mdata))
     elif mtype == 'div':
@@ -228,7 +226,7 @@ def process_gameboard_ops(gameboard):
             process_quit()
         elif otype == 'ready-start':
             if not player.ready_start:
-                clientsocket.send(bmsg('start', odata))
+                clientsocket.send(bmsg('readystart', odata))
                 player.ready_start = True
             else:
                 gameboard.dbg('game start requested again')
@@ -250,9 +248,14 @@ def process_quit():
 def update_game_status(game_status):
     # NOTE: I think it makes sense for this to be a simple string from client to gameboard
     # A status message typically is just a plain string
+    # game_status: # 'WAITING-START','RUNNING','ENDED',
     str_status = f'[Connected to {args.server}]'
-    if game_status['started']:
+    if game_status == 'WAITING-START':
+        str_status += ' Waiting for game start'
+    elif game_status == 'RUNNING':
         str_status += ' Game started'
+    elif game_status == 'ENDED':
+        str_status += ' Game has ended'
     else:
         str_status += ' Waiting for game start'
     gameboard.update_status(str_status)

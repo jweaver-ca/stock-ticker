@@ -24,11 +24,13 @@ C       ready-start Signal ready for game start
  S      error       Server couldnt process msg      error details
  S      disconnect  A client has disc.              Client name
  S      server-exit Server exiting
- S      joined      A client has joined             Client name
+ S      joined      A client has joined             {'newplayer': Client name, 'all': tuple-all player names}
  S      playerlist  List of players in game         tuple of strings
  S      servermsg   Generic message from server     string
 --- GAME RELATED ---
-CS      start       Start game/alert game started   n/a
+ S      gamestart   Start game/alert game started   {gamelen: n_minutes, stoptime: isoformat.utc}
+ S      gameover    Game has ended/winner/info      {winner: [names,...], winner-networth: n, [{'name': x, 'cash': n, 'networth': n, 'portfolio':[n,...]},...]
+C       readystart  Player indicates ready for game n/a
  S      buysell     Buy/Sell stock                  {reqid: ???, data: [ (shares, purchprice), etc 500, -1500, 0 ...]} 
 C       pause       Pause market briefly            n/a
  S      initgame    Player and Market start info    {cash: n, portfolio: [0, 500, 0... etc], market: ((price,div),(price,div),...)}

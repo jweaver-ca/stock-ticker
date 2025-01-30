@@ -1,19 +1,16 @@
 - client/server. allow "/cmd args" type messages from clients for system options
-- program a time/$ limit ending and announce winner
 - client/server. add sync checks (e.g. is cash/holdings the same?) between client/server to detect bugs
-- gameboard. if block_size > owned, allow it to go to zero
-- gameboard. see if clearing first can help request to redraw screen
-	It doesn't look it. I think the artifacts become part of the screen data
-	by accident and only by specific call to redraw those areas how they are
-	supposed to be will fix.  Or erase whole screen and re-draw all windows.
+- gameboard. if block_size > owned, allow pending to go to zero
 - server/client. bust should report all players' losses to all players (because
     it doesn't give much away and could be funny)
 - implement chat message entry without getstr(). this is what causes all the drawing artifacts now
     now that event-driven draw operations are synchronized
-- gameboard. add [C]ancel Order to gameboard menu bar (clears pending)
 - client. on start, get name if not provided (no curses?), check server, then start curses
-- client. enable [, ] buttons to raise/lower buysell block size
 - client. update status to include game name once joined
+- have stock names in only ONE place (server)
+- change countdown timer to the game timer (no need for roll timer display)
+- when blocksz changes, update all $/BLOCK listings immediately
+- Allow Play again option, server to re-play without restart
 
 --------------------------------------------------------------------------------
   DONE
@@ -24,3 +21,9 @@
 - gameboard. ScrollArea should use a curses window
 - server. Allow some game options on command line
 - implement a system of allowing multi-colored strings (escape sequences) in label updates, messages etc
+- gameboard. see if clearing first can help request to redraw screen (ANSWER: NO)
+- gameboard. add [C]ancel Order to gameboard menu bar (clears pending)
+- client. enable [, ] buttons to raise/lower buysell block size
+- when player joins, update label at top with player names for existing players
+- program a time/$ limit ending and announce winner
+- add [H]elp command, blurb about tab keys, arrow keys, space bar for buttons

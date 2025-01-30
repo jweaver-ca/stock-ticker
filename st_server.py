@@ -1,13 +1,3 @@
-'''
-    NOTES:
-    A client can request a purchase of X shares at X price.  If the server recieves this request
-    and the price of the stock in the purchase request no longer matches the actual price,
-    what should happen?
-        - refuse the purchase?
-        - make the purchase if possible anyway?
-            > if lower price, always. if higher price ...??
-        - make this a client setting?
-'''
 # (useless comment from andrea)
 #
 # TODO: .bind localhost <-- need to change for actual network comms to work?
@@ -30,18 +20,20 @@ from st_common import MessageReceiver
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-t", "--timersec", type=int, required=False, default=3, help="Default seconds between die rolls")
+parser.add_argument("-l", "--gamelen", type=float, required=False, default=15, help="Length of game in minutes")
+parser.add_argument("-p", "--port", type=int, required=False, default=8089, help="TCP/IP port to listen for connections")
 args = parser.parse_args() 
 
 SERVER_OPT = {
-    'timersec': args.timersec
+    'timersec': args.timersec,
+    'gamelen': args.gamelen
 }
 
 # ------------------------------------------------------------------------------
 #                              SYNCHRONIZATION NOTES
 # ------------------------------------------------------------------------------
-# Not much syncing required in the server program.  Each players connection runs
-# in its own thread (selector) but a player's actions cannot directly affect any
-# game data that is shared by other players.
+# Each players connection runs in its own thread (selector) but a player's
+# actions cannot directly affect any game data that is shared by other players.
 # 
 # A few game actions affect Player attributes (cash (dividend), holdings
 # (split,bust) so these actions should be synchronized against Player actions that
@@ -56,19 +48,18 @@ SERVER_OPT = {
 # started before the previous game action is complete.  A DiceRollTimer tick does
 # not run its action on a separate thread so this happens naturally.
 
-stock = types.SimpleNamespace(GOLD=1,SILVER=2,INDUSTRIAL=3,BONDS=4,OIL=5,GRAIN=6)
-stock_names = [ 'GOLD', 'SILVER', 'INDUSTRIAL', 'BONDS', 'OIL', 'GRAIN' ]
+stock = types.SimpleNamespace(GOLD=1,SILVER=2,OIL=3,BONDS=4,INDUSTRIAL=5,GRAIN=6)
+stock_names = [ 'GOLD', 'SILVER', 'OIL', 'BONDS', 'INDUSTRIAL', 'GRAIN' ]
 
 sel = selectors.DefaultSelector()
 
 serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-serversocket.bind(('localhost', 8089))
+serversocket.bind(('localhost', args.port))
 serversocket.listen(5) # become a server socket, maximum 5 connections
 #serversocket.settimeout(5) # .accept() blocks and ctrl-c doesn't break out of it.  this allows us to quit easier, but requires us to handle the except during accept
 
-lock = threading.Lock() # TODO: remove this, each game should have its own
-
 class Client:
+    '''Client objects represent a client connected to the server'''
     def __init__(self, name, conn):
         self._name = name
         self.conn = conn
@@ -174,8 +165,10 @@ class Player:
 
 class DiceRollTimer(threading.Thread):
     def __init__(self, interval, fn_action):
-        '''
-        Market actions in a game should generall run every <interval> seconds.
+        '''A StockTickerGame will have a DiceRollTime to control when the dice
+        get rolled.
+
+        Market actions in a game should generally run every <interval> seconds.
         When DiceRollTime is first started, it will pause for interval seconds
         and then execute <fn_action()>. This sequence loops forever in its own
         thread.
@@ -194,10 +187,12 @@ class DiceRollTimer(threading.Thread):
         self.action = fn_action
         self.daemon = True # just die when main thread exits
         self.paused = False
+        self.running = False # only False before game start and after game end
         self.restart_event = threading.Event()
 
     def run(self):
-        while True:
+        self.running = True
+        while self.running:
             # TODO Timer shouldn't have direct access to send_all. Add a server call. (works fine, just violates concepts)
             send_all(bmsg('actiontime', self.interval))
             time.sleep(self.interval)
@@ -206,7 +201,8 @@ class DiceRollTimer(threading.Thread):
                 self.restart_event.wait()
                 # NOTE: if paused, assume when unpaused that all players want die roll immediately
                 self.paused = False
-            self.action()
+            if self.running: # skip action if game has ended
+                self.action()
 
     def pause(self):
         self.paused = True
@@ -217,6 +213,10 @@ class DiceRollTimer(threading.Thread):
         if not self.restart_event.is_set():
             self.restart_event.set()
 
+    def stop(self):
+        '''stop() is called at the end of the game to stop the DiceRollTimer'''
+        self.running = False
+
     def set_interval(self, seconds):
         self.interval = seconds
 
@@ -224,7 +224,18 @@ class StockTickerGame():
     '''
     Encapsulates an entire session of Stock Ticker including the market
     players.
+
+    StockTickerGame will be limited in time. Number of minutes is adjustable
+    via command line argument (--gamelen).  The system time will be stored
+    at game start (starttime).  The first die roll that occurs *later* than starttime
+    will be the final roll of the game.  Winner will be the player with the highest
+    net wealth (the amount of cash after selling the whole portfolio at the final
+    prices)
     '''
+    STATUS_WAITING_START = 0
+    STATUS_RUNNING = 1
+    STATUS_ENDED = 2
+
     def __init__(self, gamename):
         self.INIT_VAL = 100      # stock price for each at game start
         self.OFF_MARKET_VAL = 0  # stock goes off market if <= this price
@@ -239,13 +250,22 @@ class StockTickerGame():
 
         self.name = gamename
         self.id = str(uuid.uuid4())
-        self.option_ignore_nopay_divrolls = True
+        self.option_ignore_nopay_divrolls = True # skip die rolls that div a non-paying stock
+        self.option_gamelen = SERVER_OPT['gamelen']
         self.option_timer_seconds = SERVER_OPT['timersec']
 
         #self.stock_names = stock_names hmm not needed
         self.market = [ self.INIT_VAL for i in range(len(stock_names)) ]
         self._players = dict()
-        self.running = False # flag indicating if game underway or not
+        
+        # status flags
+        # TODO: implement these
+        self.status = StockTickerGame.STATUS_WAITING_START
+        self.starttime = None # simple unix timestamp
+        self.endtime = None
+        #self.waiting_to_start = True # becomes False (forever) after starting
+        #self.running = False # flag indicating if game underway or not. False before gameplay starts, and after game ends
+        #self.has_ended = False # True only after the game has ended
 
         #self.roll_timer = threading.Timer(self.option_timer_seconds, self.market_action)
         self.roll_timer = DiceRollTimer(self.option_timer_seconds, self.market_action)
@@ -296,8 +316,13 @@ class StockTickerGame():
         return all([p.ready_start for p in self._players.values()])
 
     def start_game(self):
-        self.running = True
-        self.roll_timer.start()
+        if self.status == StockTickerGame.STATUS_WAITING_START:
+            self.status = StockTickerGame.STATUS_RUNNING
+            self.starttime = datetime.datetime.now(datetime.timezone.utc)
+            self.endtime = self.starttime + datetime.timedelta(minutes=self.option_gamelen)
+            self.roll_timer.start()
+        else:
+            raise RuntimeError(f"Attempt to start_game not in a waiting state {self.status}")
 
     def die_roll(self):
         ''' Produces a die and returns the result, including a flag to inicate
@@ -411,7 +436,9 @@ class StockTickerGame():
         return player_msgs
 
     def market_action(self):
-        '''Rolls dice and applies changes to the game (DiceRollTimer's action)'''
+        '''Rolls dice and applies changes to the game (DiceRollTimer's action)
+        This is the target of the DiceRollTimer. Also checks the time to see
+        if the game has ended'''
         # roll the dice
         player_msgs = [] # send after lock released
         with self.game_lock:
@@ -457,9 +484,18 @@ class StockTickerGame():
                             'playercash': player.cash
                         }
                         player_msgs.append((player, bmsg('div', div_msg_data)))
+            # check time
+            curtime = datetime.datetime.now(datetime.timezone.utc)
+            if curtime > self.endtime:
+                # game is over, set status, stop timer while locked
+                self.status = StockTickerGame.STATUS_ENDED
+                self.roll_timer.stop()
+
             # end lock
         for (p, m) in player_msgs:
             p.conn.send(m)
+        if self.status == StockTickerGame.STATUS_ENDED:
+            self.end_game()
 
     def pays_dividend(self, i_stock):
         self.assert_locked()
@@ -471,12 +507,50 @@ class StockTickerGame():
         return roll['action'] == 'DIV' and not self.pays_dividend(roll['stock'])
 
     def assert_locked(self):
-        if self.running and not self.game_lock.locked():
+        '''assert_locked: called by functions that don't want to obtain the game_lock
+        themselves, but must always be called from code blocks that have the game_lock
+        already. (a mechanism to help prevent buggy programming)
+        '''
+        if self.is_running() and not self.game_lock.locked():
             raise RuntimeError("Game is not locked")
 
-    def status(self):
+    def is_running(self):
+        return self.status == StockTickerGame.STATUS_RUNNING
+
+    def end_game(self):
+        '''Figure out the winner, send messages'''
+        max_networth = -1
+        winners = []
+        lst_player_data = []
+        for p in self.players():
+            summary = p.summary() 
+            summary['name'] = p.name
+            lst_player_data.append(summary)
+            if summary['networth'] > max_networth:
+                max_networth = summary['networth']
+                winners = [p.name]
+            elif summary['networth'] == max_networth:
+                winners.append(p.name)
+        end_game_data = {
+            'winner': winners,
+            'winner-networth': max_networth,
+            'player-info': lst_player_data
+        }
+        send_all(bmsg('gameover', end_game_data))
+
+    def get_status(self):
         # NOTE: may add more details (e.g. paused,etc?), so using dictionary even though just 1 item...
-        return {'started': self.running}
+        '''Current game status. 
+        return value here is used as the value in a 'gamestat' message to clients
+        '''
+        if self.status == StockTickerGame.STATUS_WAITING_START:
+            return 'WAITING-START'
+        elif self.status == StockTickerGame.STATUS_RUNNING:
+            return 'RUNNING'
+        elif self.status == StockTickerGame.STATUS_RUNNING:
+            return 'ENDED'
+        else:
+            raise ValueError(f"Game in bad state: {self.status}")
 
 # -- end class StockTickerGame
 
@@ -551,21 +625,23 @@ def process_message(message, clientname):
                 game = games[gamename]
                 player = game.player(client.get_name())
                 client.conn.send(bmsg('initgame', game.init_game_info(player.name)))
-                client.conn.send(bmsg('gamestat', game.status()))
-                send_all(bmsg('joined', player.name))
+                client.conn.send(bmsg('gamestat', game.get_status()))
+                send_all(bmsg('joined', {'newplayer': player.name, 'all': game.playernames()}))
                 client.conn.send(bmsg('playerlist', game.playernames()))
             else:
                 # fail
                 client.conn.send(bsmg('joinfail', {'reason': fail_reason}))
                 
-        elif message['TYPE'] == 'start':
+        elif message['TYPE'] == 'readystart':
             if not player.ready_start:
                 player.ready_start = True
                 send_all(bmsg('servermsg', f'{player.name} is ready to start'))
             if game.all_players_ready():
                 game.start_game()
-                send_all(bmsg('start', None))
-                send_all(bmsg('gamestat', game.status()))
+                send_all(bmsg('gamestart', {
+                        'gamelen': game.option_gamelen, 
+                        'stoptime': game.endtime.isoformat()}))
+                send_all(bmsg('gamestat', game.get_status()))
         elif message['TYPE'] == 'buysell':
             game.process_order(player, message['DATA'])
         else:
@@ -594,16 +670,15 @@ def buysell_call(game):
 def disconnect_client(client):
     name = client.get_name()
     print (f'disconnect_client called for {name}')
-    with lock: #Unsure how necessary or correct in logic this is...
-        #del client_conns[oClient.conn]
-        if game := client.get_game():
-            game.remove_player(name)
-            send_all_game(game, bmsg('disconnect', name))
-            send_all_game(game, bmsg('playerlist', game.playernames()))
-            print (f'Removed {name} from game "{game.name}"')
-        sel.unregister(client.conn)
-        client.conn.close()
-        del clients[name]
+    #del client_conns[oClient.conn]
+    if game := client.get_game():
+        game.remove_player(name) # call is sync'd
+        send_all_game(game, bmsg('disconnect', name))
+        send_all_game(game, bmsg('playerlist', game.playernames()))
+        print (f'Removed {name} from game "{game.name}"')
+    sel.unregister(client.conn)
+    client.conn.close()
+    del clients[name]
     print (f'{name} has disconnected')
 
 # msgobj: bytes of json message to send
@@ -667,7 +742,7 @@ while running:
                     conn.close()
             else:
                 # HMM: when would selectors.EVENT_WRITE ever be used??
-                # this is an incoming message from a connected client, or ??
+                # this is an incoming message from a connected client
                 client = key.data
                 conn = key.fileobj
                 if mask & selectors.EVENT_READ:
