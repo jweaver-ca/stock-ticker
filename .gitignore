@@ -1,3 +1,4 @@
 *.bck
 *.swp
 __pycache__
+Session.vim

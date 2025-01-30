@@ -1,6 +1,5 @@
 - client/server. allow "/cmd args" type messages from clients for system options
 - client/server. add sync checks (e.g. is cash/holdings the same?) between client/server to detect bugs
-- gameboard. if block_size > owned, allow pending to go to zero
 - server/client. bust should report all players' losses to all players (because
     it doesn't give much away and could be funny)
 - implement chat message entry without getstr(). this is what causes all the drawing artifacts now
@@ -8,7 +7,7 @@
     NOTE: I'm not convinced this is really a cause of issues, test more
 - client. on start, get name if not provided (no curses?), check server, then start curses
 - client. update status to include game name once joined
-- have stock names in only ONE place (server)
+- have stock names in only ONE place (server) NOTE: not convinced this is necessary or even sensible
 - change countdown timer to the game timer (no need for roll timer display)
 - Allow Play again option, server to re-play without restart
 
@@ -28,3 +27,4 @@
 - program a time/$ limit ending and announce winner
 - add [H]elp command, blurb about tab keys, arrow keys, space bar for buttons
 - when blocksz changes, update all $/BLOCK listings immediately
+- gameboard. if block_size > owned, allow pending to go to zero
