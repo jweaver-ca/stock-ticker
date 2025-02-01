@@ -8,6 +8,7 @@ import textwrap
 import traceback # I need to print debug logs if exception raised, but also see exception details
 
 from color_processor import ColorProcessor
+from curses_animate import AnimationThread
 
 # for debugging only. remove when done with it
 lst_log = []
@@ -139,6 +140,8 @@ class GameBoard(object):
         self.init_curses_color(15, "GRAIN"     , 15)
 
         self.color_processor = ColorProcessor(self.curses_color)
+        self.animation_thread = AnimationThread(self.scr, self.drawlock)
+        self.animation_thread.start()
 
         self.scr.clear()
 
@@ -275,6 +278,11 @@ class GameBoard(object):
             if self.pending_order[i_stock] > 0:
                 self.update_pending(bln_refresh=False)
             self.refresh_if(bln_refresh)
+        fname = f'stockprice-{i_stock}'
+        f = self.fields[fname]
+        flash_attr = self.curses_color['GOLD'] | curses.A_REVERSE
+        if fname not in self.animation_thread.animations:
+            self.animation_thread.add_flash(fname, f.y, f.x, f.length, flash_attr)
 
     def blocksz_change(self, data):
         ''' Process a request to change the buy/sell block size. '''
